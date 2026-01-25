@@ -8,7 +8,7 @@
 
 A high-performance browser extension designed for AI heavy users. It provides real-time context indexing and precision navigation for **Doubao** and **Google Gemini**.
 
-![Project Icon](icons/icon128.png)
+![Project Icon](icons/icon-128.png)
 
 ### ✨ Core Features
 - **Smart Context Indexing**: Automatically extracts user prompts to build a real-time navigation sidebar.
