@@ -9,7 +9,7 @@
 A high-performance browser extension designed for AI heavy users. It provides real-time context indexing and precision navigation for **Doubao** and **Google Gemini**.
 
 <p align="center">
-  <img src="icons/icon128.png" width="128" height="128" alt="Project Icon">
+  <img src="icons/icon-128.png" width="128" height="128" alt="Project Icon">
 </p>
 
 ### ✨ Core Features
