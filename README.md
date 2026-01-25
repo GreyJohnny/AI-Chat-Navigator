@@ -8,12 +8,14 @@
 
 A high-performance browser extension designed for AI heavy users. It provides real-time context indexing and precision navigation for **Doubao** and **Google Gemini**.
 
-![Project Icon](icons/icon-128.png)
+<p align="center">
+  <img src="icons/icon128.png" width="128" height="128" alt="Project Icon">
+</p>
 
 ### ✨ Core Features
 - **Smart Context Indexing**: Automatically extracts user prompts to build a real-time navigation sidebar.
 - **Multimodal Support**:
-    - **Image Detection**: Accurately detects images, canvases, and native `<img>` tags.
+    - **Image Detection**: Accurately detects images, canvases, and native `<img>` tags. (**Note: Currently Doubao exclusive**).
     - **Auto-Numbering**: Assigns ordered labels (e.g., *Picture 1, Picture 2*) to pure image messages.
 - **Deep Jump Engine**:
     - **Smooth Scrolling**: Identifies complex nested scroll containers to ensure precise location anchoring.
@@ -25,15 +27,9 @@ A high-performance browser extension designed for AI heavy users. It provides re
 ### 🛠️ Technical Highlights
 - **Performance Optimization**:
     - **Render Debouncing**: Limits rendering frequency to a 300ms window, preventing CPU spikes during AI's streaming output.
-    - **Heuristic Pruning**: Pre-filters nodes based on features (child count, text length) before expensive `getComputedStyle` calls to minimize **Reflow**.
-- **Spatial Fingerprinting**: Generates unique IDs for image-only messages using `offsetTop` and `offsetLeft` coordinates, ensuring index stability under **Lazy Loading** conditions.
+    - **Heuristic Pruning**: Pre-filters nodes based on features before expensive `getComputedStyle` calls to minimize **Reflow**.
+- **Spatial Fingerprinting**: (**Doubao Only**) Generates unique IDs for image-only messages using coordinates, ensuring index stability under **Lazy Loading** conditions.
 - **Two-pass Parsing**: A recursive algorithm that eliminates nested duplicates in the first pass and handles logic numbering in the second.
-
-### 📦 Installation
-1. Download and extract the source code.
-2. Go to `chrome://extensions/` in Chrome.
-3. Enable **Developer Mode**.
-4. Click **Load unpacked** and select the project folder.
 
 ---
 
@@ -44,7 +40,7 @@ A high-performance browser extension designed for AI heavy users. It provides re
 ### ✨ 核心特性
 - **智能上下文索引**：自动提取用户提问，构建实时更新的导航侧边栏。
 - **多模态支持**：
-    - **图像探测**：精准识别对话中的图片、Canvas 或原生 `<img>` 标签。
+    - **图像探测**：精准识别对话中的图片、Canvas 或原生 `<img>` 标签。（**注：目前仅在豆包侧生效**）
     - **自动编号**：针对纯图片消息提供有序编号（如 *Picture 1, Picture 2*）。
 - **深度跳转引擎**：
     - **平滑滚动**：自动识别复杂的嵌套滚动容器，确保精准锚定。
@@ -57,14 +53,8 @@ A high-performance browser extension designed for AI heavy users. It provides re
 - **性能优化**：
     - **渲染防抖 (Debounce)**：将渲染频率控制在 300ms/次，避免 AI 逐字生成时的 CPU 剧烈波动。
     - **启发式剪枝**：在调用高开销样式计算前进行特征预筛选，最大限度减少浏览器**重排 (Reflow)**。
-- **空间指纹识别**：针对无文字图片消息，结合物理坐标生成唯一 ID，解决**懒加载**环境下的索引偏移问题。
+- **空间指纹识别**：（**仅限豆包**）针对无文字图片消息，结合物理坐标生成唯一 ID，解决**懒加载**环境下的索引偏移问题。
 - **双重扫描算法**：首轮递归判定父子关系剔除嵌套，次轮完成逻辑编排。
-
-### 📦 安装方法
-1. 下载并解压源代码。
-2. 在 Chrome 中访问 `chrome://extensions/`。
-3. 开启 **开发者模式**。
-4. 点击 **加载解压的扩展程序**，选择本项目文件夹。
 
 ---
 
