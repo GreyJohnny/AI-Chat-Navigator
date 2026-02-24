@@ -6,14 +6,14 @@
 
 ## English
 
-A high-performance browser extension designed for AI heavy users. It provides real-time context indexing and precision navigation for **Doubao** and **Google Gemini**.
+A high-performance browser extension designed for AI heavy users. It provides real-time context indexing and precision navigation for **Google Gemini**.
 
 ![Project Icon](icons/icon-128.png)
 
 ### ✨ Core Features
 - **Smart Context Indexing**: Automatically extracts user prompts to build a real-time navigation sidebar.
 - **Multimodal Support**:
-    - **Image Detection**: Accurately detects images, canvases, and native `<img>` tags. (**Note: Currently Doubao exclusive**).
+    - **Image Detection**: Accurately detects images, canvases, and native `<img>` tags.
     - **Auto-Numbering**: Assigns ordered labels (e.g., *Picture 1, Picture 2*) to pure image messages.
 - **Deep Jump Engine**:
     - **Smooth Scrolling**: Identifies complex nested scroll containers to ensure precise location anchoring.
@@ -26,19 +26,19 @@ A high-performance browser extension designed for AI heavy users. It provides re
 - **Performance Optimization**:
     - **Render Debouncing**: Limits rendering frequency to a 300ms window, preventing CPU spikes during AI's streaming output.
     - **Heuristic Pruning**: Pre-filters nodes based on features before expensive `getComputedStyle` calls to minimize **Reflow**.
-- **Spatial Fingerprinting**: (**Doubao Only**) Generates unique IDs for image-only messages using coordinates, ensuring index stability under **Lazy Loading** conditions.
+- **Spatial Fingerprinting**: Generates unique IDs for image-only messages using coordinates, ensuring index stability under **Lazy Loading** conditions.
 - **Two-pass Parsing**: A recursive algorithm that eliminates nested duplicates in the first pass and handles logic numbering in the second.
 
 ---
 
 ## 中文
 
-一款专为 AI 重度用户设计的高性能浏览器扩展。为 **豆包 (Doubao)** 与 **Google Gemini** 提供实时的上下文索引与精准跳转功能。
+一款专为 AI 重度用户设计的高性能浏览器扩展。为 **Google Gemini** 提供实时的上下文索引与精准跳转功能。
 
 ### ✨ 核心特性
 - **智能上下文索引**：自动提取用户提问，构建实时更新的导航侧边栏。
 - **多模态支持**：
-    - **图像探测**：精准识别对话中的图片、Canvas 或原生 `<img>` 标签。（**注：目前仅在豆包侧生效**）
+    - **图像探测**：精准识别对话中的图片、Canvas 或原生 `<img>` 标签。
     - **自动编号**：针对纯图片消息提供有序编号（如 *Picture 1, Picture 2*）。
 - **深度跳转引擎**：
     - **平滑滚动**：自动识别复杂的嵌套滚动容器，确保精准锚定。
@@ -51,10 +51,11 @@ A high-performance browser extension designed for AI heavy users. It provides re
 - **性能优化**：
     - **渲染防抖 (Debounce)**：将渲染频率控制在 300ms/次，避免 AI 逐字生成时的 CPU 剧烈波动。
     - **启发式剪枝**：在调用高开销样式计算前进行特征预筛选，最大限度减少浏览器**重排 (Reflow)**。
-- **空间指纹识别**：（**仅限豆包**）针对无文字图片消息，结合物理坐标生成唯一 ID，解决**懒加载**环境下的索引偏移问题。
+- **空间指纹识别**：针对无文字图片消息，结合物理坐标生成唯一 ID，解决**懒加载**环境下的索引偏移问题。
 - **双重扫描算法**：首轮递归判定父子关系剔除嵌套，次轮完成逻辑编排。
 
 ---
 
 ## 📄 License
+
 [MIT License](LICENSE)
