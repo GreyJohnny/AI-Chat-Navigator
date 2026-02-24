@@ -7,7 +7,6 @@
     "storage"
   ],
   "host_permissions": [
-    "*://*.doubao.com/*",
     "*://gemini.google.com/*"
   ],
   "action": {
@@ -25,7 +24,6 @@
   "content_scripts": [
     {
       "matches": [
-        "*://*.doubao.com/*",
         "*://gemini.google.com/*"
       ],
       "css": ["src/style.css"],
@@ -33,4 +31,5 @@
       "run_at": "document_end"
     }
   ]
+
 }
