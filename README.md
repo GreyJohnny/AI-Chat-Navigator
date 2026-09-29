@@ -1,61 +1,30 @@
-# AI Chat Navigator 🚀
+# Gemini Chat Navigator
 
-[English](#english) | [中文](#中文)
+一款只针对 Google Gemini 网页版的 Chrome / Edge 扩展。它会从当前对话中提取用户提问，生成可搜索的侧边目录，并支持跳转、高亮、重命名和收藏。
 
----
+## 功能
 
-## English
+- 自动扫描 Gemini 对话里的用户提问，适配 `user-query`、`m-user-query` 等页面结构。
+- 通过侧边栏搜索提问，并平滑跳转到对应消息。
+- 支持自定义导航标题和收藏。
+- 标题与收藏保存在浏览器本地存储中。
+- 面板收纳在 Shadow DOM 中，减少与 Gemini 页面样式冲突。
+- 只在 `gemini.google.com` 上运行。
 
-A high-performance browser extension designed for AI heavy users. It provides real-time context indexing and precision navigation for **Google Gemini**.
+## 安装（开发者模式）
 
-![Project Icon](icons/icon-128.png)
+1. 打开 Chrome 或 Edge 的扩展管理页。
+2. 开启“开发者模式”。
+3. 选择“加载已解压的扩展程序”。
+4. 选择本项目文件夹。
+5. 打开或刷新 Gemini 对话页，点击页面右侧的“导航”按钮。
 
-### ✨ Core Features
-- **Smart Context Indexing**: Automatically extracts user prompts to build a real-time navigation sidebar.
-- **Multimodal Support**:
-    - **Image Detection**: Accurately detects images, canvases, and native `<img>` tags.
-    - **Auto-Numbering**: Assigns ordered labels (e.g., *Picture 1, Picture 2*) to pure image messages.
-- **Deep Jump Engine**:
-    - **Smooth Scrolling**: Identifies complex nested scroll containers to ensure precise location anchoring.
-    - **Visual Feedback**: Triggers a highlight effect on the target block upon navigation.
-- **Persistence & Management**:
-    - **Custom Renaming**: Allows manual editing of index titles.
-    - **Favorites System**: "Star" important conversations; data is persisted via `chrome.storage`.
+更新代码后，在扩展管理页点击扩展卡片上的刷新按钮，再刷新 Gemini 页面。
 
-### 🛠️ Technical Highlights
-- **Performance Optimization**:
-    - **Render Debouncing**: Limits rendering frequency to a 300ms window, preventing CPU spikes during AI's streaming output.
-    - **Heuristic Pruning**: Pre-filters nodes based on features before expensive `getComputedStyle` calls to minimize **Reflow**.
-- **Spatial Fingerprinting**: Generates unique IDs for image-only messages using coordinates, ensuring index stability under **Lazy Loading** conditions.
-- **Two-pass Parsing**: A recursive algorithm that eliminates nested duplicates in the first pass and handles logic numbering in the second.
+## 本地开发
 
----
+此扩展不需要构建步骤或第三方依赖。核心文件为 `manifest.json`、`src/content.js` 和 `src/style.css`。
 
-## 中文
+## License
 
-一款专为 AI 重度用户设计的高性能浏览器扩展。为 **Google Gemini** 提供实时的上下文索引与精准跳转功能。
-
-### ✨ 核心特性
-- **智能上下文索引**：自动提取用户提问，构建实时更新的导航侧边栏。
-- **多模态支持**：
-    - **图像探测**：精准识别对话中的图片、Canvas 或原生 `<img>` 标签。
-    - **自动编号**：针对纯图片消息提供有序编号（如 *Picture 1, Picture 2*）。
-- **深度跳转引擎**：
-    - **平滑滚动**：自动识别复杂的嵌套滚动容器，确保精准锚定。
-    - **视觉反馈**：跳转后目标块伴有高亮特效，提升定位感知。
-- **数据持久化**：
-    - **自定义重命名**：支持手动修改索引标题。
-    - **收藏系统**：支持“星标”重要对话，数据通过 `chrome.storage` 跨会话保存。
-
-### 🛠️ 技术亮点
-- **性能优化**：
-    - **渲染防抖 (Debounce)**：将渲染频率控制在 300ms/次，避免 AI 逐字生成时的 CPU 剧烈波动。
-    - **启发式剪枝**：在调用高开销样式计算前进行特征预筛选，最大限度减少浏览器**重排 (Reflow)**。
-- **空间指纹识别**：针对无文字图片消息，结合物理坐标生成唯一 ID，解决**懒加载**环境下的索引偏移问题。
-- **双重扫描算法**：首轮递归判定父子关系剔除嵌套，次轮完成逻辑编排。
-
----
-
-## 📄 License
-
-[MIT License](LICENSE)
+MIT，见 [LICENSE](LICENSE)。
