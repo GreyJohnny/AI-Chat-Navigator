@@ -1,13 +1,15 @@
 {
   "manifest_version": 3,
-  "name": "Gemini Chat Navigator",
-  "version": "2.0.0",
-  "description": "Search prompts in Gemini conversations and jump to the matching message.",
+  "name": "AI Chat Navigator",
+  "version": "2.1.0",
+  "description": "Search prompts in Gemini and Doubao conversations and jump to the matching message.",
   "permissions": [
     "storage"
   ],
   "host_permissions": [
-    "*://gemini.google.com/*"
+    "*://gemini.google.com/*",
+    "https://www.doubao.com/*",
+    "https://doubao.com/*"
   ],
   "action": {
     "default_icon": {
@@ -24,12 +26,19 @@
   "content_scripts": [
     {
       "matches": [
-        "*://gemini.google.com/*"
+        "*://gemini.google.com/*",
+        "https://www.doubao.com/chat",
+        "https://www.doubao.com/chat/*",
+        "https://doubao.com/chat",
+        "https://doubao.com/chat/*"
       ],
-      "css": ["src/style.css"],
-      "js": ["src/content.js"],
+      "css": [
+        "src/style.css"
+      ],
+      "js": [
+        "src/content.js"
+      ],
       "run_at": "document_end"
     }
   ]
-
 }

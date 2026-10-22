@@ -1,9 +1,9 @@
-.gemini-chat-nav-highlight {
-  animation: gemini-chat-nav-flash 2.3s ease-out !important;
+.ai-chat-nav-highlight {
+  animation: ai-chat-nav-flash 2.3s ease-out !important;
   border-radius: 8px;
 }
 
-@keyframes gemini-chat-nav-flash {
+@keyframes ai-chat-nav-flash {
   0% { outline: 3px solid rgba(79, 70, 229, .9); outline-offset: 3px; background-color: rgba(79, 70, 229, .22); }
   100% { outline-color: transparent; background-color: transparent; }
 }

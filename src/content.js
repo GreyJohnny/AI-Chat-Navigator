@@ -1,16 +1,23 @@
 (() => {
   'use strict';
 
-  const HOST_ID = 'gemini-chat-navigator-host';
+  const HOST_ID = 'ai-chat-navigator-host';
+  // Keep the existing key and Gemini IDs so saved titles and favorites survive.
   const STORAGE_KEY = 'geminiChatNavigatorData';
-  const SELECTORS = [
-    'user-query',
-    'm-user-query',
-    '[data-test-id="user-query"]',
-    '[data-message-author-role="user"]',
-    '[data-author="user"]',
-    '.query-text'
-  ];
+  const isDoubao = ['www.doubao.com', 'doubao.com'].includes(location.hostname);
+  if (location.hostname !== 'gemini.google.com' && !isDoubao) return;
+  if (isDoubao && !/^\/chat(?:\/|$)/.test(location.pathname)) return;
+
+  const selectors = isDoubao
+    ? ['[data-testid="send_message"]', '[class*="bg-g-send-msg-bubble"]']
+    : [
+      'user-query',
+      'm-user-query',
+      '[data-test-id="user-query"]',
+      '[data-message-author-role="user"]',
+      '[data-author="user"]',
+      '.query-text'
+    ];
 
   let data = { titles: {}, favorites: {} };
   let items = [];
@@ -22,8 +29,9 @@
   let search;
 
   const conversationId = () => {
-    const match = location.pathname.match(/\/app\/([^/?]+)/);
-    return match ? match[1] : 'home';
+    const match = location.pathname.match(isDoubao ? /^\/chat\/([^/]+)/ : /\/app\/([^/]+)/);
+    const id = match ? match[1] : 'home';
+    return isDoubao ? `doubao:${id}` : id;
   };
 
   const hash = (value) => {
@@ -37,52 +45,59 @@
 
   const cleanText = (value) => value.replace(/\s+/g, ' ').trim();
 
+  function getMessageText(element) {
+    if (isDoubao) {
+      const textNodes = Array.from(element.querySelectorAll('[data-testid="message_text_content"]'));
+      const fileNodes = Array.from(element.querySelectorAll('[data-testid="message_nested_content_file_name"]'));
+      const parts = [...textNodes, ...fileNodes]
+        .filter((node, index, nodes) => !nodes.some((parent, parentIndex) => parentIndex !== index && parent.contains(node)))
+        .map((node) => cleanText(node.innerText || node.textContent || ''))
+        .filter(Boolean);
+      if (parts.length) return parts.join(' ');
+
+      // Read only the user bubble, excluding controls and hidden accessibility text.
+      const copy = element.cloneNode(true);
+      copy.querySelectorAll('button, [role="button"], svg, [aria-hidden="true"]').forEach((node) => node.remove());
+      return cleanText(copy.textContent || '');
+    }
+
+    const queryText = element.matches('.query-text') ? element : element.querySelector('.query-text');
+    if (queryText) return cleanText(queryText.innerText || queryText.textContent || '');
+    let text = cleanText(element.innerText || element.textContent || '');
+    text = text.replace(/^You said\s+/i, '');
+    const duplicateMatch = text.match(/^(.+)\s+\1$/);
+    return duplicateMatch ? duplicateMatch[1] : text;
+  }
+
   function getMessageBlocks() {
-    const candidates = Array.from(document.querySelectorAll(SELECTORS.join(',')))
+    const candidates = Array.from(document.querySelectorAll(selectors.join(',')))
       .filter((element) => !element.closest(`#${HOST_ID}`));
 
     const blocks = [];
-    const occurrences = new Map();
     candidates.forEach((element) => {
-      let text = cleanText(element.innerText || element.textContent || '');
-      text = text.replace(/^You said\s+/i, '');
-      const middle = Math.floor(text.length / 2);
-      for (let offset = -2; offset <= 2; offset += 1) {
-        const split = middle + offset;
-        if (split > 0 && split < text.length && /\s/.test(text[split])) {
-          const first = cleanText(text.slice(0, split));
-          const second = cleanText(text.slice(split + 1));
-          if (first && first === second) {
-            text = first;
-            break;
-          }
-        }
-      }
-      const duplicateMatch = text.match(/^(.+)\s+\1$/);
-      if (duplicateMatch) text = duplicateMatch[1];
+      const text = getMessageText(element);
       const hasImage = Boolean(element.querySelector('img, canvas, video, [role="img"]'));
       if (!text && !hasImage) return;
 
       const content = text || 'Image message';
       const fingerprint = `${hash(content)}:${content.length}`;
 
-      // Prefer the outer Gemini user-query block when both it and one of its
-      // nested text nodes match a selector.
+      // A message wrapper and its nested bubble must yield a single entry.
       const nested = blocks.some((entry) => entry.element.contains(element));
       if (nested) return;
       for (let i = blocks.length - 1; i >= 0; i -= 1) {
         if (element.contains(blocks[i].element)) blocks.splice(i, 1);
       }
 
-      const occurrence = occurrences.get(fingerprint) || 0;
-      occurrences.set(fingerprint, occurrence + 1);
-      blocks.push({ element, content, fingerprint, occurrence });
+      blocks.push({ element, content, fingerprint });
     });
 
-    return blocks.map((entry) => ({
-      ...entry,
-      id: `${conversationId()}-${entry.fingerprint}-${entry.occurrence}`
-    }));
+    const occurrences = new Map();
+    return blocks.map((entry) => {
+      const occurrence = occurrences.get(entry.fingerprint) || 0;
+      occurrences.set(entry.fingerprint, occurrence + 1);
+      return { ...entry, id: `${conversationId()}-${entry.fingerprint}-${occurrence}` };
+    });
   }
 
   function makePanel() {
@@ -107,7 +122,7 @@
         }
         #panel.closed { transform: translateX(100%); }
         #toggle {
-          position: absolute; top: 22px; left: -48px; width: 48px; height: 42px;
+          position: absolute; top: 22px; left: -88px; width: 88px; height: 42px;
           border: 0; border-radius: 12px 0 0 12px; background: #4f46e5; color: white;
           font: 700 13px system-ui; cursor: pointer; box-shadow: 0 2px 8px #0002;
         }
@@ -132,7 +147,7 @@
           .action { color: #bdc1c6; }
         }
       </style>
-      <section id="panel" class="closed" aria-label="Gemini Chat Navigator">
+      <section id="panel" class="closed" aria-label="AI Chat Navigator">
         <button id="toggle" type="button" aria-expanded="false">Navigator</button>
         <header>Chat Navigator</header>
         <input id="search" type="search" placeholder="Search my prompts…" autocomplete="off" aria-label="Search my prompts">
@@ -216,10 +231,10 @@
           : getMessageBlocks().find((candidate) => candidate.id === entry.id)?.element;
         if (!target) return;
         target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-        target.classList.remove('gemini-chat-nav-highlight');
+        target.classList.remove('ai-chat-nav-highlight');
         void target.offsetWidth;
-        target.classList.add('gemini-chat-nav-highlight');
-        window.setTimeout(() => target.classList.remove('gemini-chat-nav-highlight'), 2300);
+        target.classList.add('ai-chat-nav-highlight');
+        window.setTimeout(() => target.classList.remove('ai-chat-nav-highlight'), 2300);
       });
       list.appendChild(item);
     });
@@ -247,12 +262,23 @@
       render();
       observer = new MutationObserver((mutations) => {
         if (mutations.some((mutation) => {
-          const changed = [...mutation.addedNodes, ...mutation.removedNodes];
-          return changed.some((node) => node.nodeType === Node.ELEMENT_NODE && !node.closest?.(`#${HOST_ID}`));
+          const target = mutation.target.nodeType === Node.ELEMENT_NODE
+            ? mutation.target : mutation.target.parentElement;
+          return !target?.closest(`#${HOST_ID}`);
         })) scheduleRender();
       });
-      observer.observe(document.body, { childList: true, subtree: true });
+      observer.observe(document.body, { childList: true, characterData: true, subtree: true });
       window.addEventListener('popstate', scheduleRender);
+      window.addEventListener('hashchange', scheduleRender);
+      // Both sites navigate with pushState, which does not dispatch popstate.
+      let lastConversation = conversationId();
+      window.setInterval(() => {
+        const currentConversation = conversationId();
+        if (currentConversation !== lastConversation) {
+          lastConversation = currentConversation;
+          scheduleRender();
+        }
+      }, 750);
     });
   }
 
