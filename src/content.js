@@ -27,6 +27,9 @@
   let panel;
   let list;
   let search;
+  let history;
+  let historyButton;
+  let historyStatus;
 
   const conversationId = () => {
     const match = location.pathname.match(isDoubao ? /^\/chat\/([^/]+)/ : /\/app\/([^/]+)/);
@@ -130,6 +133,11 @@
         #search { margin: 0 14px 8px; padding: 9px 11px; border: 1px solid #dadce0;
           border-radius: 9px; background: #f8f9fa; color: inherit; font: inherit; outline: none; }
         #search:focus { border-color: #4f46e5; }
+        #history-tools { margin: 0 14px 8px; }
+        #load-history { padding: 7px 10px; border: 1px solid #dadce0; border-radius: 8px;
+          background: transparent; color: inherit; font: inherit; cursor: pointer; }
+        #load-history:disabled { cursor: wait; opacity: .6; }
+        #history-status { padding-top: 7px; font-size: 12px; line-height: 1.4; opacity: .8; }
         #list { overflow: auto; padding: 2px 12px 14px; }
         .item { padding: 10px 11px; margin: 6px 0; border: 1px solid #e5e7eb;
           border-radius: 10px; background: #f8f9fa; cursor: pointer; }
@@ -151,6 +159,10 @@
         <button id="toggle" type="button" aria-expanded="false">Navigator</button>
         <header>Chat Navigator</header>
         <input id="search" type="search" placeholder="Search my prompts…" autocomplete="off" aria-label="Search my prompts">
+        ${isDoubao ? `<div id="history-tools">
+          <button id="load-history" type="button">Load full history</button>
+          <div id="history-status" role="status" aria-live="polite"></div>
+        </div>` : ''}
         <div id="list" role="list"></div>
       </section>`;
 
@@ -158,6 +170,12 @@
     panel = shadow.getElementById('panel');
     list = shadow.getElementById('list');
     search = shadow.getElementById('search');
+    historyButton = shadow.getElementById('load-history');
+    historyStatus = shadow.getElementById('history-status');
+    historyButton?.addEventListener('click', () => {
+      if (history.busy) history.cancel();
+      else history.loadAll();
+    });
     const toggle = shadow.getElementById('toggle');
 
     toggle.addEventListener('click', () => {
@@ -173,11 +191,16 @@
 
   function render() {
     makePanel();
-    items = getMessageBlocks();
+    items = history ? history.sync() : getMessageBlocks();
+    if (history) {
+      historyButton.textContent = history.busy ? 'Stop' : 'Load full history';
+      historyButton.disabled = history.loading;
+      historyStatus.textContent = history.status();
+    }
     list.replaceChildren();
     const visible = items.filter((item) => {
       const title = data.titles[item.id] || item.content;
-      return title.toLocaleLowerCase().includes(query);
+      return title.toLocaleLowerCase().includes(query) || item.content.toLocaleLowerCase().includes(query);
     });
 
     if (!visible.length) {
@@ -226,15 +249,23 @@
       item.appendChild(actions);
 
       item.addEventListener('click', () => {
-        const target = entry.element.isConnected
-          ? entry.element
+        const route = conversationId();
+        if (history && history.activeId !== route) { render(); return; }
+        history?.cancel();
+        const highlight = (target) => {
+          if (!target?.isConnected || route !== conversationId()) return;
+          target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+          target.classList.remove('ai-chat-nav-highlight');
+          void target.offsetWidth;
+          target.classList.add('ai-chat-nav-highlight');
+          window.setTimeout(() => target.classList.remove('ai-chat-nav-highlight'), 2300);
+        };
+        const target = history ? history.findMounted(entry)
           : getMessageBlocks().find((candidate) => candidate.id === entry.id)?.element;
-        if (!target) return;
-        target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-        target.classList.remove('ai-chat-nav-highlight');
-        void target.offsetWidth;
-        target.classList.add('ai-chat-nav-highlight');
-        window.setTimeout(() => target.classList.remove('ai-chat-nav-highlight'), 2300);
+        if (target) highlight(target);
+        else history?.locate(entry).then(highlight).catch(() => {
+          if (route === conversationId()) historyStatus.textContent = 'Could not locate this prompt. Load history and try again.';
+        });
       });
       list.appendChild(item);
     });
@@ -259,6 +290,9 @@
           favorites: saved.favorites && typeof saved.favorites === 'object' ? saved.favorites : {}
         };
       }
+      if (isDoubao) history = new globalThis.AIChatHistoryIndex({
+        readMessages: getMessageBlocks, conversationId, onChange: render
+      });
       render();
       observer = new MutationObserver((mutations) => {
         if (mutations.some((mutation) => {
@@ -267,7 +301,8 @@
           return !target?.closest(`#${HOST_ID}`);
         })) scheduleRender();
       });
-      observer.observe(document.body, { childList: true, characterData: true, subtree: true });
+      observer.observe(document.body, { childList: true, characterData: true, attributes: true,
+        attributeFilter: ['data-message-id'], subtree: true });
       window.addEventListener('popstate', scheduleRender);
       window.addEventListener('hashchange', scheduleRender);
       // Both sites navigate with pushState, which does not dispatch popstate.
