@@ -2,14 +2,21 @@
   'use strict';
 
   const pause = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+  const FILE_ONLY = /^.+\.(?:pdf|docx?|xlsx?|pptx?|txt|md|csv|zip|rar|7z|png|jpe?g|gif|webp|mp3|wav|mp4|mov)$/i;
 
-  // Keep a message index independent of Doubao's recycled DOM nodes. All reads
-  // use rendered page content; no private APIs or application state are needed.
+  function isTextPrompt(content) {
+    const value = String(content || '').replace(/\s+/g, ' ').trim();
+    return Boolean(value) && value !== 'Image message' && !FILE_ONLY.test(value);
+  }
+
+  // Keep a message index independent of virtualized DOM nodes. All reads use
+  // rendered page content; no private APIs or application state are needed.
   class ChatHistoryIndex {
     constructor({ readMessages, conversationId, onChange, stepDelay = 300,
-      boundaryDelay = 1000, boundaryPasses = 3, maxDuration = 120000 }) {
+      boundaryDelay = 1000, boundaryPasses = 3, maxDuration = 120000,
+      locateDelay = 140, locateTimeout = 10000 }) {
       Object.assign(this, { readMessages, conversationId, onChange, stepDelay,
-        boundaryDelay, boundaryPasses, maxDuration });
+        boundaryDelay, boundaryPasses, maxDuration, locateDelay, locateTimeout });
       this.states = new Map();
       this.activeId = null;
       this.operation = null;
@@ -46,8 +53,12 @@
         const saved = result[this.storageKey(id)];
         if (Array.isArray(saved?.entries)) {
           saved.entries.forEach((entry) => {
-            if (entry && typeof entry.id === 'string' && typeof entry.content === 'string' && typeof entry.fingerprint === 'string') {
-              state.entries.set(entry.nativeId ? `message:${entry.nativeId}` : `legacy:${entry.id}`, { ...entry, element: null });
+            if (entry && isTextPrompt(entry.content)
+              && typeof entry.id === 'string' && typeof entry.content === 'string'
+              && typeof entry.fingerprint === 'string') {
+              state.entries.set(entry.nativeId ? `message:${entry.nativeId}` : `legacy:${entry.id}`, {
+                ...entry, element: null, mountedOrder: null
+              });
             }
           });
         }
@@ -66,7 +77,7 @@
       return null;
     }
 
-    metadata(entry, scroller) {
+    metadata(entry, scroller, mountedOrder = null) {
       const node = entry.element;
       const nativeNode = node.matches('[data-message-id]') ? node
         : node.querySelector('[data-message-id]') || node.closest('[data-message-id]');
@@ -74,7 +85,7 @@
       const row = node.closest('.v_list_row');
       const order = row?.style.getPropertyValue('--cls').match(/^r-(\d+)-/);
       const position = scroller ? Math.round(scroller.scrollTop + node.getBoundingClientRect().top - scroller.getBoundingClientRect().top) : null;
-      return { ...entry, nativeId, rowIndex: order ? Number(order[1]) : null, position };
+      return { ...entry, nativeId, mountedOrder, rowIndex: order ? Number(order[1]) : null, position };
     }
 
     sync() {
@@ -82,7 +93,9 @@
       const state = this.state;
       if (state.loading) return [];
       const scroller = this.getScroller();
-      const mounted = this.readMessages().map((entry) => this.metadata(entry, scroller));
+      const mounted = this.readMessages().map(
+        (entry, mountedOrder) => this.metadata(entry, scroller, mountedOrder)
+      );
       const signature = mounted.map((entry) => entry.nativeId || '').filter(Boolean).join(',');
       // A route can change before the previous conversation's DOM is replaced.
       if (state.pendingSignature && signature === state.pendingSignature) return this.entries();
@@ -98,7 +111,8 @@
         const previous = state.entries.get(key);
         if (previous) {
           const updated = { ...previous, ...entry, id: previous.id };
-          dirty ||= ['content', 'fingerprint', 'rowIndex', 'position'].some((field) => previous[field] !== updated[field]);
+          dirty ||= ['content', 'fingerprint', 'hasImage', 'rowIndex', 'position']
+            .some((field) => previous[field] !== updated[field]);
           state.entries.set(key, updated);
         } else {
           // Preserve 2.1 navigation IDs while assigning distinct IDs to repeated
@@ -110,13 +124,21 @@
           dirty = true;
         }
       });
-      state.entries.forEach((entry) => { if (!entry.element?.isConnected) entry.element = null; });
+      state.entries.forEach((entry) => {
+        if (!entry.element?.isConnected) {
+          entry.element = null;
+          entry.mountedOrder = null;
+        }
+      });
       if (dirty) this.persist(this.activeId, state);
       return this.entries();
     }
 
     entries() {
       return Array.from(this.state.entries.values()).sort((a, b) => {
+        if (a.mountedOrder !== null && b.mountedOrder !== null) {
+          return a.mountedOrder - b.mountedOrder;
+        }
         if (a.rowIndex !== null && b.rowIndex !== null) return a.rowIndex - b.rowIndex;
         if (a.position !== null && b.position !== null) return a.position - b.position;
         return 0;
@@ -126,7 +148,7 @@
     persist(id, state) {
       window.clearTimeout(state.saveTimer);
       state.saveTimer = window.setTimeout(() => {
-        const entries = Array.from(state.entries.values(), ({ element, ...entry }) => entry);
+        const entries = Array.from(state.entries.values(), ({ element, mountedOrder, ...entry }) => entry);
         chrome.storage.local.set({ [this.storageKey(id)]: { entries } }, () => {
           if (chrome.runtime?.lastError) {
             state.message = 'Local storage is full. The index is available in this tab only.';
@@ -155,9 +177,9 @@
       if (notify) this.onChange();
     }
 
-    start(type) {
+    start(type, duration = this.maxDuration) {
       this.cancel(false);
-      const operation = { type, id: this.activeId, cancelled: false, deadline: Date.now() + this.maxDuration };
+      const operation = { type, id: this.activeId, cancelled: false, deadline: Date.now() + duration };
       this.operation = operation;
       this.state.message = '';
       this.onChange();
@@ -183,15 +205,16 @@
       scroller.dispatchEvent(new Event('scroll'));
     }
 
-    async walk(scroller, direction, operation, target) {
+    async walk(scroller, direction, operation, target,
+      stepDelay = this.stepDelay, boundaryDelay = this.boundaryDelay, maxSteps = 700) {
       let stable = 0;
-      for (let step = 0; step < 700 && this.refresh(operation); step += 1) {
+      for (let step = 0; step < maxSteps && this.refresh(operation); step += 1) {
         if (target && this.findMounted(target)) return 'found';
         const before = `${scroller.scrollHeight}:${this.state.entries.size}:${this.lastNativeSignature}`;
         const edge = direction < 0 ? scroller.scrollTop <= 1
           : scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 1;
         this.scroll(scroller, scroller.scrollTop + direction * Math.max(100, scroller.clientHeight * 0.75));
-        await pause(edge ? this.boundaryDelay : this.stepDelay);
+        await pause(edge ? boundaryDelay : stepDelay);
         if (!this.refresh(operation)) return 'interrupted';
         const after = `${scroller.scrollHeight}:${this.state.entries.size}:${this.lastNativeSignature}`;
         const atEdge = direction < 0 ? scroller.scrollTop <= 1
@@ -263,11 +286,11 @@
         this.onChange();
         return null;
       }
-      const operation = this.start('jump');
+      const operation = this.start('jump', this.locateTimeout);
       try {
         if (entry.position !== null) {
           this.scroll(scroller, entry.position - scroller.clientHeight / 3);
-          await pause(this.stepDelay);
+          await pause(this.locateDelay);
           if (!this.refresh(operation)) return null;
         }
         // Stored offsets may shift after pagination or a window resize. Virtual
@@ -284,12 +307,18 @@
           const next = (low + high) / 2;
           if (Math.abs(next - scroller.scrollTop) < 2) break;
           this.scroll(scroller, next);
-          await pause(this.stepDelay);
+          await pause(this.locateDelay);
           if (!this.refresh(operation)) return null;
         }
         if (this.valid(operation) && !this.findMounted(entry)) {
-          const up = await this.walk(scroller, -1, operation, entry);
-          if (this.valid(operation) && up === 'boundary') await this.walk(scroller, 1, operation, entry);
+          const up = await this.walk(
+            scroller, -1, operation, entry, this.locateDelay, this.locateDelay * 2
+          );
+          if (this.valid(operation) && up === 'boundary') {
+            await this.walk(
+              scroller, 1, operation, entry, this.locateDelay, this.locateDelay * 2
+            );
+          }
         }
         if (!this.valid(operation)) return null;
         const target = this.findMounted(entry);
