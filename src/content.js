@@ -5,6 +5,7 @@
   // Keep the existing key and Gemini IDs so saved titles and bookmarks survive.
   const STORAGE_KEY = 'geminiChatNavigatorData';
   const PENDING_KEY = 'aiChatNavigatorPendingTarget';
+  const PENDING_TIMEOUT = 30000;
   const isDoubao = ['www.doubao.com', 'doubao.com'].includes(location.hostname);
   if (location.hostname !== 'gemini.google.com' && !isDoubao) return;
   if (isDoubao && !/^\/chat(?:\/|$)/.test(location.pathname)) return;
@@ -104,11 +105,12 @@
   };
 
   const cleanText = (value) => value.replace(/\s+/g, ' ').trim();
-  const FILE_ONLY = /^.+\.(?:pdf|docx?|xlsx?|pptx?|txt|md|csv|zip|rar|7z|png|jpe?g|gif|webp|mp3|wav|mp4|mov)$/i;
 
   function isTextPromptContent(content) {
     const value = cleanText(content || '');
-    return Boolean(value) && value !== 'Image message' && !FILE_ONLY.test(value);
+    // Attachment nodes are excluded by getMessageText. A filename in actual
+    // prompt text is still text, including a prompt consisting of "report.pdf".
+    return Boolean(value) && value !== 'Image message';
   }
 
   function getNativeMessageId(element) {
@@ -196,6 +198,11 @@
     entries.forEach((entry) => {
       if (data.saved[entry.id] === true || data.saved[entry.id]?.legacy) {
         data.saved[entry.id] = createSavedRecord(entry);
+        changed = true;
+      } else if (data.saved[entry.id] && entry.nativeId
+        && data.saved[entry.id].nativeId !== entry.nativeId) {
+        data.saved[entry.id] = { ...data.saved[entry.id], nativeId: entry.nativeId,
+          position: entry.position, rowIndex: entry.rowIndex };
         changed = true;
       }
     });
@@ -535,7 +542,7 @@
     if (Number.isFinite(left.position) && Number.isFinite(right.position)) {
       return Math.abs(left.position - right.position) <= 24;
     }
-    return true;
+    return Boolean(left.element && left.element === right.element);
   }
 
   function dedupeHistoryItems(entries) {
@@ -876,11 +883,14 @@
 
   function retryPendingTarget() {
     if (!pendingTarget) return;
-    if (pendingAttempts >= 20) {
-      historyStatus.textContent = 'The saved conversation did not finish loading. Open it and try again.';
+    if (Date.now() - pendingTarget.pendingAt >= PENDING_TIMEOUT || pendingAttempts >= 60) {
+      const message = 'Could not locate the saved prompt before the timeout. Try Load full history.';
+      if (history?.state) history.state.message = message;
+      historyStatus.textContent = message;
       clearPendingTarget();
       return;
     }
+    historyStatus.textContent = 'Waiting for the saved conversation to load…';
     pendingAttempts += 1;
     window.clearTimeout(pendingRetryTimer);
     pendingRetryTimer = window.setTimeout(render, 500);
@@ -888,28 +898,33 @@
 
   function maybeResolvePendingTarget() {
     if (!pendingTarget || pendingBusy) return;
-    if (Date.now() - pendingTarget.pendingAt > 120000) {
-      clearPendingTarget();
-      return;
-    }
     if (pendingTarget.conversationId !== conversationId()) {
       retryPendingTarget();
       return;
     }
-    if (!items.length) {
+    panel.classList.remove('closed');
+    panel.querySelector('#toggle').setAttribute('aria-expanded', 'true');
+    // Cached entries can arrive before the page hydrates its message list.
+    // A mounted target needs no scroll container; an unloaded target does.
+    const mounted = history?.findMounted(pendingTarget);
+    const scroller = history?.getScroller();
+    if (!items.length || history?.loading || history?.state?.pendingSignature
+      || (!mounted && (!scroller || scroller.clientHeight <= 0))) {
+      retryPendingTarget();
+      return;
+    }
+    if (Date.now() - pendingTarget.pendingAt >= PENDING_TIMEOUT) {
       retryPendingTarget();
       return;
     }
 
     pendingBusy = true;
     const target = pendingTarget;
-    focusRecord(target).then((found) => {
-      if (!found) historyStatus.textContent = 'Could not locate the saved prompt. Try Load full history.';
-    }).catch(() => {
-      historyStatus.textContent = 'Could not locate the saved prompt. Try Load full history.';
-    }).finally(() => {
+    focusRecord(target).catch(() => false).then((found) => {
       pendingBusy = false;
-      clearPendingTarget();
+      if (pendingTarget !== target) return;
+      if (found || conversationId() !== target.conversationId) clearPendingTarget();
+      else retryPendingTarget();
     });
   }
 

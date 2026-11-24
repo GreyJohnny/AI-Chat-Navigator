@@ -2,11 +2,10 @@
   'use strict';
 
   const pause = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
-  const FILE_ONLY = /^.+\.(?:pdf|docx?|xlsx?|pptx?|txt|md|csv|zip|rar|7z|png|jpe?g|gif|webp|mp3|wav|mp4|mov)$/i;
 
   function isTextPrompt(content) {
     const value = String(content || '').replace(/\s+/g, ' ').trim();
-    return Boolean(value) && value !== 'Image message' && !FILE_ONLY.test(value);
+    return Boolean(value) && value !== 'Image message';
   }
 
   // Keep a message index independent of virtualized DOM nodes. All reads use
@@ -104,6 +103,23 @@
       let dirty = false;
       mounted.forEach((entry) => {
         let key = entry.nativeId ? `message:${entry.nativeId}` : `legacy:${entry.id}`;
+        if (entry.nativeId && !state.entries.has(key)) {
+          const promoted = Array.from(state.entries).find(([, saved]) => {
+            const temporary = !saved.nativeId || /^(?:local|temp|pending)[_:-]/i.test(saved.nativeId);
+            if (!temporary || saved.fingerprint !== entry.fingerprint) return false;
+            if (saved.rowIndex !== null && entry.rowIndex !== null) return saved.rowIndex === entry.rowIndex;
+            if (saved.element === entry.element) return true;
+            return Number.isFinite(saved.position) && Number.isFinite(entry.position)
+              && Math.abs(saved.position - entry.position) <= 2;
+          });
+          if (promoted) {
+            // Re-key the same logical message, preserving its navigation ID,
+            // title and saved state instead of allocating another occurrence.
+            state.entries.delete(promoted[0]);
+            state.entries.set(key, promoted[1]);
+            dirty = true;
+          }
+        }
         if (!entry.nativeId) {
           const existing = Array.from(state.entries).find(([, saved]) => saved.element === entry.element);
           if (existing) key = existing[0];

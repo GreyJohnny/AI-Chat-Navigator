@@ -15,7 +15,8 @@ async function mount(t, { html = '', url = 'https://www.doubao.com/chat/123', sa
   const jumps = [];
   window.chrome = { storage: { local: {
     get(keys, callback) { callback(structuredClone(storage)); },
-    set(values, callback) { Object.assign(storage, structuredClone(values)); callback?.(); }
+    set(values, callback) { Object.assign(storage, structuredClone(values)); callback?.(); },
+    remove(keys, callback) { for (const key of [].concat(keys)) delete storage[key]; callback?.(); }
   } } };
   window.Element.prototype.scrollIntoView = function (options) { jumps.push({ element: this, options }); };
   await new Promise((resolve) => window.document.addEventListener('DOMContentLoaded', resolve, { once: true }));
@@ -64,7 +65,7 @@ test('Doubao indexes user prompts once and excludes assistant messages and sideb
   assert.equal(app.shadow.querySelector('.empty').textContent, 'No matching prompts');
 });
 
-test('Doubao text and attachment titles exclude controls; image messages remain navigable', async (t) => {
+test('Doubao indexes text without attachment filenames and excludes attachment-only messages', async (t) => {
   const app = await mount(t, { html: `
     <div data-testid="send_message">
       <div data-testid="message_text_content">Explain this file</div>
@@ -73,7 +74,7 @@ test('Doubao text and attachment titles exclude controls; image messages remain 
     <div data-testid="send_message"><img src="data:image/png;base64," alt="Uploaded image"></div>
     <div data-testid="send_message"><div data-testid="message_nested_content_file_name">report.txt</div></div>
   ` });
-  assert.deepEqual(app.titles(), ['Explain this file notes.pdf', 'Image message', 'report.txt']);
+  assert.deepEqual(app.titles(), ['Explain this file']);
 });
 
 test('rename and favorite persist after reloading a Doubao conversation', async (t) => {
@@ -315,4 +316,125 @@ test('switching conversations does not add the previous route\'s mounted message
   node.textContent = 'New conversation prompt';
   await eventually(() => app.titles()[0] === 'New conversation prompt');
   assert.deepEqual(app.titles(), ['New conversation prompt']);
+});
+
+test('ordinary text ending in a filename remains indexed and saved after reload', async (t) => {
+  for (const prompt of ['Please explain the filename report.pdf', '请解释这个文件 report.pdf', 'report.pdf']) {
+    const html = '<div data-testid="send_message"><div data-testid="message_text_content"></div></div>';
+    const setup = (window) => { window.document.querySelector('[data-testid="message_text_content"]').textContent = prompt; };
+    const app = await mount(t, { html, setup });
+    assert.deepEqual(app.titles(), [prompt]);
+    app.shadow.querySelector('[aria-label="Add to favorites"]').click();
+    const loaded = await mount(t, { html, setup, saved: app.storage });
+    assert.deepEqual(loaded.titles(), [prompt]);
+    loaded.shadow.getElementById('saved-button').click();
+    assert.equal(loaded.shadow.querySelector('.saved-title').textContent, prompt);
+  }
+});
+
+test('legacy cached text ending in a filename is retained', async (t) => {
+  const app = await mount(t, { saved: {
+    'aiChatNavigatorIndex:doubao:123': { entries: [{ id: 'doubao:123-old-0',
+      content: 'Please explain report.pdf', fingerprint: 'old:25', nativeId: 'saved-id',
+      rowIndex: 0, position: 0 }] }
+  } });
+  assert.deepEqual(app.titles(), ['Please explain report.pdf']);
+});
+
+test('formal message IDs preserve pinned state, title and saved metadata', async (t) => {
+  for (const temporaryId of [null, 'local_123', 'temp:123']) {
+    const app = await mount(t, { html: '<div data-testid="send_message"><div data-testid="message_text_content">Same prompt</div></div>',
+      setup(window) {
+        if (temporaryId) window.document.querySelector('[data-testid="send_message"]').setAttribute('data-message-id', temporaryId);
+      }
+    });
+    app.window.prompt = () => 'My pinned title';
+    app.shadow.querySelector('[aria-label="Rename"]').click();
+    app.shadow.querySelector('[aria-label="Add to favorites"]').click();
+    const originalId = Object.keys(app.storage[storageKey].saved)[0];
+    app.window.document.querySelector('[data-testid="send_message"]').setAttribute('data-message-id', 'formal-123');
+    await eventually(() => app.storage[storageKey].saved[originalId].nativeId === 'formal-123');
+    assert.deepEqual(app.titles(), ['My pinned title']);
+    assert.equal(app.shadow.getElementById('pinned-count').textContent, '(1)');
+    assert.equal(app.shadow.getElementById('saved-count').textContent, '1');
+    assert.equal(app.shadow.getElementById('pinned-section').hidden, false);
+    assert.ok(app.shadow.querySelector('#list [aria-label="Remove favorite"]'));
+    await eventually(() => app.storage['aiChatNavigatorIndex:doubao:123']?.entries.length === 1);
+    const stored = app.storage['aiChatNavigatorIndex:doubao:123'].entries[0];
+    assert.equal(stored.id, originalId);
+    assert.equal(stored.nativeId, 'formal-123');
+  }
+});
+
+test('different stable message IDs on recycled elements remain distinct', async (t) => {
+  const app = await mount(t, { html: '<div data-testid="send_message" data-message-id="stable-a">Repeat</div>' });
+  app.shadow.querySelector('[aria-label="Add to favorites"]').click();
+  app.window.document.querySelector('[data-message-id]').setAttribute('data-message-id', 'stable-b');
+  await eventually(() => app.shadow.querySelectorAll('#list .item').length === 2);
+  assert.equal(app.shadow.querySelectorAll('#list [aria-label="Remove favorite"]').length, 1);
+  assert.equal(app.shadow.querySelectorAll('#list [aria-label="Add to favorites"]').length, 1);
+});
+
+test('identical text without position evidence is not hidden as an ID promotion', async (t) => {
+  const app = await mount(t, { html: '<div data-testid="send_message">Repeat</div><div data-testid="send_message" data-message-id="stable">Repeat</div>' });
+  assert.deepEqual(app.titles(), ['Repeat', 'Repeat']);
+});
+
+async function pendingSample(t) {
+  const original = await mount(t, { html: '<div data-testid="send_message" data-message-id="target">Saved prompt</div>' });
+  original.shadow.querySelector('[aria-label="Add to favorites"]').click();
+  const saved = structuredClone(original.storage);
+  const record = Object.values(saved[storageKey].saved)[0];
+  saved.aiChatNavigatorPendingTarget = { ...record, pendingAt: Date.now() };
+  saved['aiChatNavigatorIndex:doubao:123'] = { entries: [{ ...record, fingerprint: record.fingerprint }] };
+  return saved;
+}
+
+test('cross-chat navigation waits for hydrated DOM instead of consuming a cached target early', async (t) => {
+  const app = await mount(t, { saved: await pendingSample(t) });
+  assert.equal(app.titles().length, 1);
+  assert.ok(app.storage.aiChatNavigatorPendingTarget);
+  assert.match(app.shadow.getElementById('history-status').textContent, /Waiting/);
+  await new Promise((resolve) => setTimeout(resolve, 600));
+  assert.ok(app.storage.aiChatNavigatorPendingTarget);
+  assert.equal(app.jumps.length, 0);
+  const message = app.window.document.createElement('div');
+  message.setAttribute('data-testid', 'send_message');
+  message.setAttribute('data-message-id', 'target');
+  message.textContent = 'Saved prompt';
+  app.window.document.body.appendChild(message);
+  await eventually(() => app.jumps.length === 1);
+  await eventually(() => !app.storage.aiChatNavigatorPendingTarget);
+  assert.equal(app.jumps[0].element, message);
+  assert.equal(app.shadow.getElementById('toggle').getAttribute('aria-expanded'), 'true');
+});
+
+test('failed first locate is retried while the saved page finishes rendering', async (t) => {
+  let attempts = 0;
+  const app = await mount(t, { saved: await pendingSample(t), setup(window) {
+    const Original = window.AIChatHistoryIndex;
+    window.AIChatHistoryIndex = class extends Original {
+      getScroller() { return { clientHeight: 200 }; }
+      async locate() {
+        attempts += 1;
+        if (attempts === 1) return null;
+        const node = window.document.createElement('div');
+        node.textContent = 'Saved prompt';
+        window.document.body.appendChild(node);
+        return node;
+      }
+    };
+  } });
+  await eventually(() => app.jumps.length === 1);
+  assert.equal(attempts, 2);
+  await eventually(() => !app.storage.aiChatNavigatorPendingTarget);
+});
+
+test('pending navigation times out with a visible error', async (t) => {
+  const saved = await pendingSample(t);
+  saved.aiChatNavigatorPendingTarget.pendingAt = Date.now() - 31000;
+  const app = await mount(t, { saved });
+  assert.equal(app.storage.aiChatNavigatorPendingTarget, undefined);
+  assert.match(app.shadow.getElementById('history-status').textContent, /timeout/);
+  assert.equal(app.jumps.length, 0);
 });
