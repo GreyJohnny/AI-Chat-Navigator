@@ -65,7 +65,7 @@ test('Doubao indexes user prompts once and excludes assistant messages and sideb
   assert.equal(app.shadow.querySelector('.empty').textContent, 'No matching prompts');
 });
 
-test('Doubao indexes text without attachment filenames and excludes attachment-only messages', async (t) => {
+test('Doubao indexes images and text without file attachment filenames', async (t) => {
   const app = await mount(t, { html: `
     <div data-testid="send_message">
       <div data-testid="message_text_content">Explain this file</div>
@@ -74,7 +74,61 @@ test('Doubao indexes text without attachment filenames and excludes attachment-o
     <div data-testid="send_message"><img src="data:image/png;base64," alt="Uploaded image"></div>
     <div data-testid="send_message"><div data-testid="message_nested_content_file_name">report.txt</div></div>
   ` });
-  assert.deepEqual(app.titles(), ['Explain this file']);
+  assert.deepEqual(app.titles(), ['Explain this file', 'Image message']);
+});
+
+test('separate image submissions remain separate and mixed prompts merge within their own row', async (t) => {
+  const app = await mount(t, { html: `
+    <div class="v_list_row" id="photo"><div data-testid="send_message" data-message-id="photo"><button><span role="img"><img src="photo.png"></span></button></div></div>
+    <div class="v_list_row" id="gallery"><div data-testid="send_message" data-message-id="gallery"><img src="one.png"><img src="two.png"></div></div>
+    <div class="v_list_row" id="mixed">
+      <div data-testid="send_message" data-message-id="mixed"><img src="mixed.png"></div>
+      <div data-testid="send_message" data-message-id="mixed"><div data-testid="message_text_content">Explain the diagram</div></div>
+    </div>
+    <div data-testid="receive_message"><img src="answer.png"></div>
+  ` });
+  assert.deepEqual(app.titles(), ['Image message', 'Image message (2 images)', 'Explain the diagram']);
+  for (const [index, id] of ['photo', 'gallery', 'mixed'].entries()) {
+    app.shadow.querySelectorAll('.item')[index].click();
+    await eventually(() => app.jumps.length > index);
+    assert.equal(app.jumps.at(-1).element.id, id);
+    assert.equal(app.jumps.at(-1).options.behavior, 'smooth');
+  }
+  app.window.prompt = () => 'My diagram';
+  app.shadow.querySelectorAll('[aria-label="Rename"]')[2].click();
+  app.shadow.querySelectorAll('[aria-label="Add to favorites"]')[2].click();
+  const record = Object.values(app.storage[storageKey].saved)[0];
+  assert.equal(record.hasImage, true);
+  assert.equal(record.imageCount, 1);
+});
+
+test('Gemini image-only and mixed prompts exclude accessibility labels and assistant images', async (t) => {
+  const app = await mount(t, { url: 'https://gemini.google.com/app/images', html: `
+    <user-query id="photo"><h5>You said</h5><button>View image<img src="photo.png"></button><div class="query-text"></div></user-query>
+    <model-response><img src="answer.png"></model-response>
+    <user-query id="mixed"><img src="diagram.png"><div class="query-text">Read this diagram</div></user-query>
+  ` });
+  assert.deepEqual(app.titles(), ['Image message', 'Read this diagram']);
+  app.shadow.querySelector('.item').click();
+  await eventually(() => app.jumps.length > 0);
+  assert.equal(app.jumps[0].element.id, 'photo');
+});
+
+test('image prompts retain renamed titles, pinned and global saved state after reload', async (t) => {
+  const options = { html: '<div data-testid="send_message" data-message-id="photo"><img src="private-image.png"></div>' };
+  const app = await mount(t, options);
+  app.shadow.querySelector('[aria-label="Add to favorites"]').click();
+  const initialSaved = await mount(t, { ...options, saved: app.storage });
+  initialSaved.shadow.getElementById('saved-button').click();
+  assert.equal(initialSaved.shadow.querySelector('.saved-title').textContent, 'Image message');
+  app.window.prompt = () => 'Circuit diagram';
+  app.shadow.querySelector('[aria-label="Rename"]').click();
+  const loaded = await mount(t, { ...options, saved: app.storage });
+  assert.deepEqual(loaded.titles(), ['Circuit diagram']);
+  assert.equal(loaded.shadow.querySelector('.pinned-title').textContent, 'Circuit diagram');
+  loaded.shadow.getElementById('saved-button').click();
+  assert.equal(loaded.shadow.querySelector('.saved-title').textContent, 'Circuit diagram');
+  assert.equal(JSON.stringify(loaded.storage).includes('private-image.png'), false);
 });
 
 test('rename and favorite persist after reloading a Doubao conversation', async (t) => {
@@ -154,7 +208,7 @@ test('only supported chat pages receive the English panel', async (t) => {
   assert.equal(app.shadow.querySelector('.empty').textContent, 'No prompts found');
 });
 
-function virtualConversation({ count = 12, prepend = 0, repeated = false, stepDelay = 5, maxDuration = 4000 } = {}) {
+function virtualConversation({ count = 12, prepend = 0, repeated = false, images = false, stepDelay = 5, maxDuration = 4000 } = {}) {
   const control = { writes: 0 };
   const options = {
     html: '<div data-testid="message-list"><div class="scroller" style="overflow-y:auto"></div></div>',
@@ -193,7 +247,7 @@ function virtualConversation({ count = 12, prepend = 0, repeated = false, stepDe
           const id = firstId + index;
           return `<div class="v_list_row" data-fixture-index="${index}" style="--cls:r-${index}-0_block_${id}">
             <div data-testid="send_message"><div data-testid="message_content" data-message-id="msg-${id}">
-              <div data-testid="message_text_content">${repeated ? 'Repeat' : `Question ${id}`}</div>
+              ${images ? '<img src="photo.png">' : `<div data-testid="message_text_content">${repeated ? 'Repeat' : `Question ${id}`}</div>`}
             </div></div>
           </div>`;
         }).join('');
@@ -215,6 +269,21 @@ function virtualConversation({ count = 12, prepend = 0, repeated = false, stepDe
   };
   return { options, control };
 }
+
+test('image history scans retain identical labels and locate unloaded images after reload', async (t) => {
+  const { options } = virtualConversation({ count: 6, images: true });
+  const app = await mount(t, options);
+  app.shadow.getElementById('load-history').click();
+  await eventually(() => app.shadow.getElementById('history-status').textContent.startsWith('History scanned.'));
+  await eventually(() => app.storage['aiChatNavigatorIndex:doubao:123']?.entries.length === 6);
+  const loaded = await mount(t, { ...virtualConversation({ count: 6, images: true }).options, saved: app.storage });
+  assert.deepEqual(loaded.titles(), Array(6).fill('Image message'));
+  assert.equal(loaded.window.document.querySelectorAll('img').length, 2);
+  loaded.shadow.querySelector('.item').click();
+  await eventually(() => loaded.jumps.length > 0);
+  assert.equal(loaded.jumps.at(-1).element.querySelector('[data-message-id]').getAttribute('data-message-id'), 'msg-0');
+  assert.equal(loaded.jumps.at(-1).options.behavior, 'smooth');
+});
 
 test('history scan visits virtual windows, retains unmounted prompts, and restores the reading position', async (t) => {
   const { options, control } = virtualConversation();

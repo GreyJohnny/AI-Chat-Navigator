@@ -3,9 +3,9 @@
 
   const pause = (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
-  function isTextPrompt(content) {
+  function isPrompt(content) {
     const value = String(content || '').replace(/\s+/g, ' ').trim();
-    return Boolean(value) && value !== 'Image message';
+    return Boolean(value);
   }
 
   // Keep a message index independent of virtualized DOM nodes. All reads use
@@ -52,7 +52,7 @@
         const saved = result[this.storageKey(id)];
         if (Array.isArray(saved?.entries)) {
           saved.entries.forEach((entry) => {
-            if (entry && isTextPrompt(entry.content)
+            if (entry && isPrompt(entry.content)
               && typeof entry.id === 'string' && typeof entry.content === 'string'
               && typeof entry.fingerprint === 'string') {
               state.entries.set(entry.nativeId ? `message:${entry.nativeId}` : `legacy:${entry.id}`, {
@@ -127,7 +127,7 @@
         const previous = state.entries.get(key);
         if (previous) {
           const updated = { ...previous, ...entry, id: previous.id };
-          dirty ||= ['content', 'fingerprint', 'hasImage', 'rowIndex', 'position']
+          dirty ||= ['content', 'fingerprint', 'hasImage', 'imageCount', 'rowIndex', 'position']
             .some((field) => previous[field] !== updated[field]);
           state.entries.set(key, updated);
         } else {

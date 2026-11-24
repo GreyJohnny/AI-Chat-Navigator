@@ -106,11 +106,9 @@
 
   const cleanText = (value) => value.replace(/\s+/g, ' ').trim();
 
-  function isTextPromptContent(content) {
+  function isPromptContent(content) {
     const value = cleanText(content || '');
-    // Attachment nodes are excluded by getMessageText. A filename in actual
-    // prompt text is still text, including a prompt consisting of "report.pdf".
-    return Boolean(value) && value !== 'Image message';
+    return Boolean(value);
   }
 
   function getNativeMessageId(element) {
@@ -135,6 +133,7 @@
       content: entry.content,
       fingerprint: entry.fingerprint || null,
       hasImage: Boolean(entry.hasImage),
+      imageCount: entry.imageCount || 0,
       nativeId: entry.nativeId || getNativeMessageId(entry.element),
       position: Number.isFinite(entry.position) ? entry.position : null,
       rowIndex: Number.isFinite(entry.rowIndex) ? entry.rowIndex : null,
@@ -189,7 +188,7 @@
   function savedRecords() {
     return Object.entries(data.saved)
       .map(([id, value]) => normalizeSavedRecord(id, value))
-      .filter((record) => record && isTextPromptContent(record.content))
+      .filter((record) => record && isPromptContent(record.content))
       .sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
   }
 
@@ -228,55 +227,19 @@
 
     const queryText = element.matches('.query-text') ? element : element.querySelector('.query-text');
     if (queryText) return cleanText(queryText.innerText || queryText.textContent || '');
-    let text = cleanText(element.innerText || element.textContent || '');
-    text = text.replace(/^You said\s+/i, '');
+    const copy = element.cloneNode(true);
+    copy.querySelectorAll('button, [role="button"], img, canvas, video, svg, [role="img"], [aria-hidden="true"]').forEach((node) => node.remove());
+    let text = cleanText(copy.textContent || '');
+    text = text.replace(/^You said(?:\s+|$)/i, '');
     const duplicateMatch = text.match(/^(.+)\s+\1$/);
     return duplicateMatch ? duplicateMatch[1] : text;
   }
 
-  function hasAssistantBetween(left, right, assistants) {
-    return assistants.some((assistant) => (
-      Boolean(left.compareDocumentPosition(assistant) & Node.DOCUMENT_POSITION_FOLLOWING)
-      && Boolean(right.compareDocumentPosition(assistant) & Node.DOCUMENT_POSITION_PRECEDING)
-    ));
-  }
-
-  function mergeImageGroupsByTurn(groups) {
-    const entries = Array.from(groups.values()).sort((left, right) => {
-      if (left.element === right.element) return 0;
-      return left.element.compareDocumentPosition(right.element) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1;
-    });
-    const assistants = Array.from(document.querySelectorAll(
-      '[data-testid="receive_message"], [class*="bg-g-receive-msg-bubble"], '
-      + 'model-response, m-model-response, [data-message-author-role="assistant"], '
-      + '[data-author="model"], [data-author="assistant"]'
-    )).filter((node) => !node.closest(`#${HOST_ID}`));
-
-    const runs = [];
-    let run = [];
-    entries.forEach((entry) => {
-      if (run.length && hasAssistantBetween(run.at(-1).element, entry.element, assistants)) {
-        runs.push(run);
-        run = [];
-      }
-      run.push(entry);
-    });
-    if (run.length) runs.push(run);
-
-    runs.forEach((turn) => {
-      const textGroups = turn.filter((group) => group.texts.size > 0);
-      const imageGroups = turn.filter((group) => group.texts.size === 0 && group.hasImage);
-      if (textGroups.length !== 1 || imageGroups.length === 0
-        || textGroups.length + imageGroups.length !== turn.length) return;
-      const target = textGroups[0];
-      imageGroups.forEach((group) => {
-        target.hasImage = true;
-        target.nativeId ||= group.nativeId;
-        group.mergedInto = target;
-      });
-    });
-
-    return entries.filter((group) => !group.mergedInto);
+  function getMessageImages(element) {
+    const nodes = Array.from(element.querySelectorAll('img, canvas, [role="img"]'))
+      .filter((node) => !node.closest('svg, [data-testid*="avatar"], [data-testid="message_nested_content_file_name"]'));
+    // An accessible image wrapper and its thumbnail represent the same image.
+    return nodes.filter((node) => !nodes.some((child) => child !== node && node.contains(child)));
   }
 
   function getMessageBlocks() {
@@ -289,34 +252,37 @@
     const groups = new Map();
     rootCandidates.forEach((element) => {
       const text = getMessageText(element);
-      const hasImage = Boolean(element.querySelector('img, canvas, video, [role="img"]'));
+      const images = getMessageImages(element);
       const nativeId = getNativeMessageId(element);
       const row = isDoubao ? element.closest('.v_list_row') : null;
       const turn = element.closest('user-query, m-user-query, [data-testid^="conversation-turn-"]');
       const groupNode = row || turn || (nativeId ? `message:${nativeId}` : element);
       let group = groups.get(groupNode);
       if (!group) {
-        group = { element, groupElement: row || turn || null, texts: new Set(), hasImage: false, nativeId };
+        group = { element, groupElement: row || turn || null, texts: new Set(), images: new Set(), nativeId };
         groups.set(groupNode, group);
       }
       if (text) group.texts.add(text);
-      group.hasImage ||= hasImage || Boolean(group.groupElement?.querySelector?.(
-        'img, canvas, video, [role="img"]'
-      ));
+      images.forEach((image) => group.images.add(image));
       group.nativeId ||= nativeId;
     });
 
-    const mergedGroups = mergeImageGroupsByTurn(groups);
-    const blocks = mergedGroups.map((group) => {
-      const content = Array.from(group.texts).join(' ');
+    // Merge only within an explicit message/turn, never by adjacency: separate
+    // image-only submissions can appear next to text during lazy loading.
+    const blocks = Array.from(groups.values()).map((group) => {
+      const imageCount = group.images.size;
+      const content = Array.from(group.texts).join(' ') || (imageCount
+        ? imageCount === 1 ? 'Image message' : `Image message (${imageCount} images)`
+        : '');
       return {
         element: group.groupElement || group.element,
         content,
         fingerprint: `${hash(content)}:${content.length}`,
-        hasImage: group.hasImage,
+        hasImage: imageCount > 0,
+        imageCount,
         nativeId: group.nativeId
       };
-    }).filter((block) => isTextPromptContent(block.content));
+    }).filter((block) => isPromptContent(block.content));
 
     const occurrences = new Map();
     return blocks.map((entry) => {
