@@ -127,7 +127,7 @@
         const previous = state.entries.get(key);
         if (previous) {
           const updated = { ...previous, ...entry, id: previous.id };
-          dirty ||= ['content', 'fingerprint', 'hasImage', 'imageCount', 'rowIndex', 'position']
+          dirty ||= ['content', 'fingerprint', 'hasImage', 'imageCount', 'imageOnly', 'rowIndex', 'position']
             .some((field) => previous[field] !== updated[field]);
           state.entries.set(key, updated);
         } else {

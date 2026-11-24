@@ -111,6 +111,21 @@
     return Boolean(value);
   }
 
+  function imagePlaceholder(count) {
+    return count > 1 ? `Image message (${count} images)` : 'Image message';
+  }
+
+  function numberedImageTitle(entry) {
+    if (!entry.imageNumber) return '';
+    const count = entry.imageCount > 1 ? ` (${entry.imageCount} images)` : '';
+    return `Image ${entry.imageNumber}${count}`;
+  }
+
+  function promptTitle(entry) {
+    const customTitle = data.titles[entry.id] || (entry.title !== entry.content ? entry.title : '');
+    return customTitle || numberedImageTitle(entry) || entry.content;
+  }
+
   function getNativeMessageId(element) {
     if (!element) return null;
     const node = element.matches('[data-message-id]') ? element
@@ -134,6 +149,7 @@
       fingerprint: entry.fingerprint || null,
       hasImage: Boolean(entry.hasImage),
       imageCount: entry.imageCount || 0,
+      imageNumber: entry.imageNumber || null,
       nativeId: entry.nativeId || getNativeMessageId(entry.element),
       position: Number.isFinite(entry.position) ? entry.position : null,
       rowIndex: Number.isFinite(entry.rowIndex) ? entry.rowIndex : null,
@@ -195,14 +211,20 @@
   function migrateLegacySaved(entries) {
     let changed = false;
     entries.forEach((entry) => {
-      if (data.saved[entry.id] === true || data.saved[entry.id]?.legacy) {
+      const saved = data.saved[entry.id];
+      if (saved === true || saved?.legacy) {
         data.saved[entry.id] = createSavedRecord(entry);
         changed = true;
-      } else if (data.saved[entry.id] && entry.nativeId
-        && data.saved[entry.id].nativeId !== entry.nativeId) {
-        data.saved[entry.id] = { ...data.saved[entry.id], nativeId: entry.nativeId,
-          position: entry.position, rowIndex: entry.rowIndex };
-        changed = true;
+      } else if (saved) {
+        if (entry.nativeId && saved.nativeId !== entry.nativeId) {
+          Object.assign(saved, { nativeId: entry.nativeId, position: entry.position, rowIndex: entry.rowIndex });
+          changed = true;
+        }
+        const imageNumber = entry.imageNumber || null;
+        if ((saved.imageNumber || null) !== imageNumber || (imageNumber && saved.imageCount !== entry.imageCount)) {
+          Object.assign(saved, { imageNumber, imageCount: entry.imageCount });
+          changed = true;
+        }
       }
     });
     if (changed) persist();
@@ -271,15 +293,16 @@
     // image-only submissions can appear next to text during lazy loading.
     const blocks = Array.from(groups.values()).map((group) => {
       const imageCount = group.images.size;
-      const content = Array.from(group.texts).join(' ') || (imageCount
-        ? imageCount === 1 ? 'Image message' : `Image message (${imageCount} images)`
-        : '');
+      const text = Array.from(group.texts).join(' ');
+      const imageOnly = !text && imageCount > 0;
+      const content = imageOnly ? imagePlaceholder(imageCount) : text;
       return {
         element: group.groupElement || group.element,
         content,
         fingerprint: `${hash(content)}:${content.length}`,
         hasImage: imageCount > 0,
         imageCount,
+        imageOnly,
         nativeId: group.nativeId
       };
     }).filter((block) => isPromptContent(block.content));
@@ -499,8 +522,8 @@
   }
 
   function matchesQuery(entry) {
-    const title = data.titles[entry.id] || entry.content;
-    return title.toLocaleLowerCase().includes(query) || entry.content.toLocaleLowerCase().includes(query);
+    return [promptTitle(entry), numberedImageTitle(entry), entry.content]
+      .some((value) => value.toLocaleLowerCase().includes(query));
   }
 
   function samePromptPosition(left, right) {
@@ -633,7 +656,7 @@
 
     const title = document.createElement('div');
     title.className = pinned ? 'pinned-title' : 'title';
-    title.textContent = data.titles[entry.id] || entry.content;
+    title.textContent = promptTitle(entry);
     item.appendChild(title);
 
     const actions = document.createElement('div');
@@ -643,7 +666,7 @@
     rename.setAttribute('aria-label', 'Rename');
     rename.addEventListener('click', (event) => {
       event.stopPropagation();
-      const updated = window.prompt('Set a navigation title for this prompt:', data.titles[entry.id] || entry.content);
+      const updated = window.prompt('Set a navigation title for this prompt:', promptTitle(entry));
       if (updated && cleanText(updated)) {
         const nextTitle = cleanText(updated);
         data.titles[entry.id] = nextTitle;
@@ -688,9 +711,9 @@
     savedList.replaceChildren();
 
     const filtered = records.filter((record) => {
-      const title = data.titles[record.id] || record.title || record.content;
+      const title = promptTitle(record);
       const meta = `${providerLabel(record.provider)} ${record.conversationTitle || ''}`;
-      return `${title} ${record.content || ''} ${meta}`.toLocaleLowerCase().includes(savedQuery);
+      return `${title} ${numberedImageTitle(record)} ${record.content} ${meta}`.toLocaleLowerCase().includes(savedQuery);
     });
 
     if (!filtered.length) {
@@ -744,7 +767,7 @@
 
         const savedTitle = document.createElement('div');
         savedTitle.className = 'saved-title';
-        savedTitle.textContent = data.titles[record.id] || record.title || record.content;
+        savedTitle.textContent = promptTitle(record);
         const meta = document.createElement('div');
         meta.className = 'saved-meta';
         meta.textContent = `${providerLabel(record.provider)} · ${record.conversationTitle || 'Conversation'}`;
@@ -759,7 +782,14 @@
 
   function render() {
     makePanel();
-    items = history ? dedupeHistoryItems(history.sync()) : getMessageBlocks();
+    const indexedItems = history ? dedupeHistoryItems(history.sync()) : getMessageBlocks();
+    let imageNumber = 0;
+    items = indexedItems.map((entry) => {
+      // Older caches store the placeholder but have no imageOnly flag.
+      const imageOnly = entry.imageOnly ?? (entry.hasImage && entry.content === imagePlaceholder(entry.imageCount));
+      // Number the full index before searching or splitting into pinned items.
+      return imageOnly ? { ...entry, imageNumber: ++imageNumber } : entry;
+    });
     migrateLegacySaved(items);
     if (history) {
       historyButton.textContent = history.busy ? 'Stop' : 'Load full history';

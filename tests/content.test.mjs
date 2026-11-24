@@ -74,7 +74,7 @@ test('Doubao indexes images and text without file attachment filenames', async (
     <div data-testid="send_message"><img src="data:image/png;base64," alt="Uploaded image"></div>
     <div data-testid="send_message"><div data-testid="message_nested_content_file_name">report.txt</div></div>
   ` });
-  assert.deepEqual(app.titles(), ['Explain this file', 'Image message']);
+  assert.deepEqual(app.titles(), ['Explain this file', 'Image 1']);
 });
 
 test('separate image submissions remain separate and mixed prompts merge within their own row', async (t) => {
@@ -87,7 +87,7 @@ test('separate image submissions remain separate and mixed prompts merge within 
     </div>
     <div data-testid="receive_message"><img src="answer.png"></div>
   ` });
-  assert.deepEqual(app.titles(), ['Image message', 'Image message (2 images)', 'Explain the diagram']);
+  assert.deepEqual(app.titles(), ['Image 1', 'Image 2 (2 images)', 'Explain the diagram']);
   for (const [index, id] of ['photo', 'gallery', 'mixed'].entries()) {
     app.shadow.querySelectorAll('.item')[index].click();
     await eventually(() => app.jumps.length > index);
@@ -108,7 +108,7 @@ test('Gemini image-only and mixed prompts exclude accessibility labels and assis
     <model-response><img src="answer.png"></model-response>
     <user-query id="mixed"><img src="diagram.png"><div class="query-text">Read this diagram</div></user-query>
   ` });
-  assert.deepEqual(app.titles(), ['Image message', 'Read this diagram']);
+  assert.deepEqual(app.titles(), ['Image 1', 'Read this diagram']);
   app.shadow.querySelector('.item').click();
   await eventually(() => app.jumps.length > 0);
   assert.equal(app.jumps[0].element.id, 'photo');
@@ -120,7 +120,7 @@ test('image prompts retain renamed titles, pinned and global saved state after r
   app.shadow.querySelector('[aria-label="Add to favorites"]').click();
   const initialSaved = await mount(t, { ...options, saved: app.storage });
   initialSaved.shadow.getElementById('saved-button').click();
-  assert.equal(initialSaved.shadow.querySelector('.saved-title').textContent, 'Image message');
+  assert.equal(initialSaved.shadow.querySelector('.saved-title').textContent, 'Image 1');
   app.window.prompt = () => 'Circuit diagram';
   app.shadow.querySelector('[aria-label="Rename"]').click();
   const loaded = await mount(t, { ...options, saved: app.storage });
@@ -270,18 +270,21 @@ function virtualConversation({ count = 12, prepend = 0, repeated = false, images
   return { options, control };
 }
 
-test('image history scans retain identical labels and locate unloaded images after reload', async (t) => {
+test('image numbers follow the full index across search and locate unloaded images from an older cache', async (t) => {
   const { options } = virtualConversation({ count: 6, images: true });
   const app = await mount(t, options);
   app.shadow.getElementById('load-history').click();
   await eventually(() => app.shadow.getElementById('history-status').textContent.startsWith('History scanned.'));
   await eventually(() => app.storage['aiChatNavigatorIndex:doubao:123']?.entries.length === 6);
+  for (const entry of app.storage['aiChatNavigatorIndex:doubao:123'].entries) delete entry.imageOnly;
   const loaded = await mount(t, { ...virtualConversation({ count: 6, images: true }).options, saved: app.storage });
-  assert.deepEqual(loaded.titles(), Array(6).fill('Image message'));
+  assert.deepEqual(loaded.titles(), Array.from({ length: 6 }, (_, i) => `Image ${i + 1}`));
   assert.equal(loaded.window.document.querySelectorAll('img').length, 2);
+  loaded.search('Image 2');
+  assert.deepEqual(loaded.titles(), ['Image 2']);
   loaded.shadow.querySelector('.item').click();
   await eventually(() => loaded.jumps.length > 0);
-  assert.equal(loaded.jumps.at(-1).element.querySelector('[data-message-id]').getAttribute('data-message-id'), 'msg-0');
+  assert.equal(loaded.jumps.at(-1).element.querySelector('[data-message-id]').getAttribute('data-message-id'), 'msg-1');
   assert.equal(loaded.jumps.at(-1).options.behavior, 'smooth');
 });
 
