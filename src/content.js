@@ -582,7 +582,7 @@
 
   function highlightTarget(target, route = conversationId()) {
     if (!target?.isConnected || route !== conversationId()) return false;
-    target.scrollIntoView({ behavior: 'auto', block: 'center', inline: 'nearest' });
+    target.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
     target.classList.remove('ai-chat-nav-highlight');
     void target.offsetWidth;
     target.classList.add('ai-chat-nav-highlight');
