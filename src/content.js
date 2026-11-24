@@ -6,21 +6,93 @@
   const STORAGE_KEY = 'geminiChatNavigatorData';
   const PENDING_KEY = 'aiChatNavigatorPendingTarget';
   const PENDING_TIMEOUT = 30000;
-  const isDoubao = ['www.doubao.com', 'doubao.com'].includes(location.hostname);
-  if (location.hostname !== 'gemini.google.com' && !isDoubao) return;
-  if (isDoubao && !/^\/chat(?:\/|$)/.test(location.pathname)) return;
-  const currentProvider = isDoubao ? 'doubao' : 'gemini';
+  const PROVIDERS = {
+    gemini: {
+      hosts: ['gemini.google.com'],
+      label: 'Gemini',
+      origin: 'https://gemini.google.com',
+      routePatterns: [/\/app\/([^/?#]+)/],
+      conversationPath: (id) => `/app/${id}`,
+      selectors: [
+        'user-query',
+        'm-user-query',
+        '[data-test-id="user-query"]',
+        '[data-message-author-role="user"]',
+        '[data-author="user"]',
+        '.query-text'
+      ],
+      turnSelector: 'user-query, m-user-query, [data-testid^="conversation-turn-"]',
+      scrollerSelectors: [],
+      virtual: false,
+      groupByVirtualRow: false,
+      scanTiming: { stepDelay: 260, boundaryDelay: 900, minStepDelay: 45, minBoundaryDelay: 120 }
+    },
+    doubao: {
+      hosts: ['www.doubao.com', 'doubao.com'],
+      label: 'Doubao',
+      origin: 'https://www.doubao.com',
+      routePatterns: [/^\/chat\/([^/?#]+)/],
+      conversationPath: (id) => `/chat/${id}`,
+      selectors: ['[data-testid="send_message"]', '[class*="bg-g-send-msg-bubble"]'],
+      turnSelector: '',
+      scrollerSelectors: ['[data-testid="message-list"] .scroller'],
+      virtual: true,
+      groupByVirtualRow: true,
+      scanTiming: { stepDelay: 280, boundaryDelay: 1000, minStepDelay: 55, minBoundaryDelay: 150 }
+    },
+    chatgpt: {
+      hosts: ['chatgpt.com', 'www.chatgpt.com', 'chat.openai.com'],
+      label: 'ChatGPT',
+      origin: 'https://chatgpt.com',
+      routePatterns: [/\/c\/([^/?#]+)/],
+      conversationPath: (id) => `/c/${id}`,
+      selectors: [
+        '.bg-user-message',
+        '[class*="user-message"]'
+      ],
+      turnSelector: '',
+      scrollerSelectors: [
+        '[data-testid="conversation-panel"] .overflow-y-auto',
+        '[data-testid="thread"]'
+      ],
+      virtual: false,
+      groupByVirtualRow: false,
+      historyMode: 'dom-scroll',
+      mirrorDom: true,
+      scanTiming: { stepDelay: 150, boundaryDelay: 800, minStepDelay: 45, minBoundaryDelay: 120 }
+    },
+    deepseek: {
+      hosts: ['chat.deepseek.com'],
+      label: 'DeepSeek',
+      origin: 'https://chat.deepseek.com',
+      routePatterns: [
+        /\/a\/chat\/s\/([^/?#]+)/,
+        /\/chat\/s\/([^/?#]+)/,
+        /\/chat\/([^/?#]+)/
+      ],
+      conversationPath: (id) => `/a/chat/s/${id}`,
+      selectors: [
+        '[data-message-author-role="user"]',
+        '[data-message-role="user"]',
+        '[data-role="user"]',
+        '[data-testid="user-message"]',
+        '[data-testid*="user-message"]',
+        '.fbb737a4'
+      ],
+      turnSelector: '',
+      scrollerSelectors: ['.ds-scroll-area'],
+      virtual: true,
+      groupByVirtualRow: false,
+      indexVersion: 2,
+      scanTiming: { stepDelay: 220, boundaryDelay: 1000, minStepDelay: 55, minBoundaryDelay: 150 }
+    }
+  };
 
-  const selectors = isDoubao
-    ? ['[data-testid="send_message"]', '[class*="bg-g-send-msg-bubble"]']
-    : [
-      'user-query',
-      'm-user-query',
-      '[data-test-id="user-query"]',
-      '[data-message-author-role="user"]',
-      '[data-author="user"]',
-      '.query-text'
-    ];
+  const currentProvider = Object.entries(PROVIDERS)
+    .find(([, provider]) => provider.hosts.includes(location.hostname))?.[0];
+  if (!currentProvider) return;
+  const site = PROVIDERS[currentProvider];
+  if (currentProvider === 'doubao' && !/^\/chat(?:\/|$)/.test(location.pathname)) return;
 
   let data = { titles: {}, saved: {} };
   let items = [];
@@ -51,47 +123,57 @@
   let pinnedCount;
   let pinnedList;
   let pinnedResizer;
+  let promptTooltip;
+  let tooltipHideTimer;
   let pendingTarget = null;
   let pendingBusy = false;
   let pendingRetryTimer;
   let pendingAttempts = 0;
 
+  function routeConversationId() {
+    for (const pattern of site.routePatterns) {
+      const match = location.pathname.match(pattern);
+      if (match) return match[1];
+    }
+    return 'home';
+  }
+
   const conversationId = () => {
-    const match = location.pathname.match(isDoubao ? /^\/chat\/([^/]+)/ : /\/app\/([^/]+)/);
-    const id = match ? match[1] : 'home';
-    return isDoubao ? `doubao:${id}` : id;
+    const id = routeConversationId();
+    return currentProvider === 'gemini' ? id : `${currentProvider}:${id}`;
   };
 
   const conversationUrl = () => `${location.origin}${location.pathname}`;
 
   function getConversationTitle() {
     const title = cleanText(document.title || '')
-      .replace(/\s*[-–—|]\s*(Google Gemini|Gemini|豆包|Doubao).*$/i, '')
+      .replace(/\s*[-–—|]\s*(Google Gemini|Gemini|豆包|Doubao|ChatGPT|DeepSeek).*$/i, '')
       .trim();
     return title || conversationId();
   }
 
   function providerFromId(id) {
-    return id.startsWith('doubao:') ? 'doubao' : 'gemini';
+    const provider = Object.keys(PROVIDERS).find((name) => (
+      name !== 'gemini' && id.startsWith(`${name}:`)
+    ));
+    return provider || 'gemini';
   }
 
   function providerLabel(provider) {
-    if (provider === 'doubao') return 'Doubao';
-    if (provider === 'gemini') return 'Gemini';
-    return provider || 'AI';
+    return PROVIDERS[provider]?.label || provider || 'AI';
   }
 
   function deriveConversationFromId(id) {
     const provider = providerFromId(id);
-    const base = provider === 'doubao' ? id.slice('doubao:'.length) : id;
-    const match = base.match(/^(.+)-[a-z0-9]+(?::\d+)?-\d+$/);
+    const providerSite = PROVIDERS[provider];
+    const prefix = provider === 'gemini' ? '' : `${provider}:`;
+    const base = id.slice(prefix.length);
+    const match = base.match(/^(.+)-[a-z0-9]+(?::\d+)?-(?:r\d+|\d+)$/);
     const rawId = match ? match[1] : base;
-    const route = provider === 'doubao' ? `/chat/${rawId}` : `/app/${rawId}`;
-    const origin = provider === 'doubao' ? 'https://www.doubao.com' : 'https://gemini.google.com';
     return {
       provider,
-      conversationId: provider === 'doubao' ? `doubao:${rawId}` : rawId,
-      conversationUrl: `${origin}${route}`
+      conversationId: provider === 'gemini' ? rawId : `${provider}:${rawId}`,
+      conversationUrl: `${providerSite.origin}${providerSite.conversationPath(rawId)}`
     };
   }
 
@@ -128,9 +210,91 @@
 
   function getNativeMessageId(element) {
     if (!element) return null;
-    const node = element.matches('[data-message-id]') ? element
-      : element.closest('[data-message-id]') || element.querySelector('[data-message-id]');
-    return node?.getAttribute('data-message-id') || null;
+    const idSelector = '[data-message-id], [data-msg-id]';
+    const node = element.matches(idSelector) ? element
+      : element.closest(idSelector) || element.querySelector(idSelector);
+    return node?.getAttribute('data-message-id') || node?.getAttribute('data-msg-id') || null;
+  }
+
+  const VIRTUAL_ROW_SELECTOR = [
+    '.v_list_row',
+    '[data-virtual-index]',
+    '[data-virtual-row-index]',
+    '[data-index]',
+    '.ds-virtual-list__item',
+    '[class*="virtual-list-item"]',
+    '[class*="virtual-row"]'
+  ].join(',');
+
+  function getVirtualRow(element) {
+    if (!site.virtual || !element) return null;
+    for (let node = element; node && node !== document.body; node = node.parentElement) {
+      if (node.matches(VIRTUAL_ROW_SELECTOR)) return node;
+    }
+    return null;
+  }
+
+  function getRowIndex(element) {
+    const row = getVirtualRow(element);
+    if (!row) return null;
+    const attribute = row.getAttribute('data-index')
+      ?? row.getAttribute('data-virtual-index')
+      ?? row.getAttribute('data-virtual-row-index')
+      ?? row.getAttribute('aria-rowindex');
+    if (/^\d+$/.test(attribute || '')) return Number(attribute);
+    const cls = row.style.getPropertyValue('--cls').match(/^r-(\d+)-/);
+    return cls ? Number(cls[1]) : null;
+  }
+
+  function visibleRowIndexes(scroller) {
+    if (!site.virtual || !scroller) return [];
+    return Array.from(scroller.querySelectorAll(VIRTUAL_ROW_SELECTOR))
+      .map((row) => getRowIndex(row))
+      .filter(Number.isFinite);
+  }
+
+  function isScrollContainer(node) {
+    if (!node || node === document.documentElement || node === document.body) return false;
+    return /auto|scroll|overlay/.test(getComputedStyle(node).overflowY) && node.clientHeight > 0;
+  }
+
+  function largestScrollContainer(root) {
+    if (!root) return null;
+    let best = null;
+    const candidates = [root, ...root.querySelectorAll('*')];
+    for (const node of candidates) {
+      if (!isScrollContainer(node)) continue;
+      const range = node.scrollHeight - node.clientHeight;
+      const score = range * Math.max(1, node.clientHeight);
+      if (score > 0 && (!best || score > best.score)) best = { node, score };
+    }
+    return best?.node || null;
+  }
+
+  function findScroller() {
+    const message = getMessageBlocks()[0]?.element
+      || document.querySelector('[data-message-author-role], [data-testid^="conversation-turn-"]')
+      || (currentProvider === 'chatgpt' ? document.querySelector('main, [role="main"]') : null);
+    let containingFallback = null;
+    for (const selector of site.scrollerSelectors) {
+      const nodes = Array.from(document.querySelectorAll(selector));
+      const containing = nodes.filter((node) => message && node.contains(message));
+      const scrollable = containing.find(isScrollContainer);
+      if (scrollable) return scrollable;
+      containingFallback ||= containing[0] || nodes[0] || null;
+    }
+    for (let node = message?.parentElement; node; node = node.parentElement) {
+      if (isScrollContainer(node)) return node;
+    }
+    if (currentProvider === 'chatgpt') {
+      const roots = Array.from(document.querySelectorAll('main, [role="main"]'));
+      for (const root of roots) {
+        const scroller = largestScrollContainer(root);
+        if (scroller) return scroller;
+      }
+    }
+    if (!site.virtual) return document.scrollingElement || containingFallback;
+    return containingFallback;
   }
 
   function isSavedId(id) {
@@ -231,7 +395,7 @@
   }
 
   function getMessageText(element) {
-    if (isDoubao) {
+    if (currentProvider === 'doubao') {
       const textNodes = Array.from(element.querySelectorAll('[data-testid="message_text_content"]'));
       const fileNodes = Array.from(element.querySelectorAll('[data-testid="message_nested_content_file_name"]'));
       const textParts = textNodes
@@ -247,26 +411,112 @@
       return cleanText(copy.textContent || '');
     }
 
+    if (currentProvider === 'chatgpt') {
+      const textNodes = Array.from(element.querySelectorAll('.whitespace-pre-wrap'));
+      const rootTextNodes = textNodes.filter((node, index) => !textNodes.some(
+        (parent, parentIndex) => parentIndex !== index && parent.contains(node)
+      ));
+      if (rootTextNodes.length) {
+        return rootTextNodes
+          .map((node) => cleanText(node.innerText || node.textContent || ''))
+          .filter(Boolean)
+          .join(' ');
+      }
+    }
+
+    if (currentProvider === 'deepseek') {
+      const userContent = element.matches('.fbb737a4') ? element
+        : element.querySelector('.fbb737a4');
+      if (userContent) return cleanText(userContent.innerText || userContent.textContent || '');
+    }
+
     const queryText = element.matches('.query-text') ? element : element.querySelector('.query-text');
     if (queryText) return cleanText(queryText.innerText || queryText.textContent || '');
     const copy = element.cloneNode(true);
-    copy.querySelectorAll('button, [role="button"], img, canvas, video, svg, [role="img"], [aria-hidden="true"]').forEach((node) => node.remove());
+    copy.querySelectorAll(
+      'button, [role="button"], img, canvas, video, svg, [role="img"], [aria-hidden="true"], .sr-only, [class~="sr-only"]'
+    ).forEach((node) => node.remove());
     let text = cleanText(copy.textContent || '');
-    text = text.replace(/^You said(?:\s+|$)/i, '');
+    text = cleanText(text.replace(/^You said(?::|\s+|$)/i, ''));
     const duplicateMatch = text.match(/^(.+)\s+\1$/);
     return duplicateMatch ? duplicateMatch[1] : text;
   }
 
   function getMessageImages(element) {
     const nodes = Array.from(element.querySelectorAll('img, canvas, [role="img"]'))
-      .filter((node) => !node.closest('svg, [data-testid*="avatar"], [data-testid="message_nested_content_file_name"]'));
+      .filter((node) => !node.closest(
+        'svg, [data-testid*="avatar"], [class*="avatar"], [data-testid="message_nested_content_file_name"]'
+      ));
     // An accessible image wrapper and its thumbnail represent the same image.
     return nodes.filter((node) => !nodes.some((child) => child !== node && node.contains(child)));
   }
 
+  const ASSISTANT_ROLE_SELECTOR = [
+    '[data-message-author-role="assistant"]',
+    '[data-message-role="assistant"]',
+    '[data-role="assistant"]'
+  ].join(',');
+  function isAssistantMessage(element) {
+    return Boolean(element.matches(ASSISTANT_ROLE_SELECTOR)
+      || element.closest(ASSISTANT_ROLE_SELECTOR));
+  }
+
+  function isRenderedMessage(element) {
+    for (let node = element; node && node !== document.body; node = node.parentElement) {
+      if (node.matches('[hidden], [aria-hidden="true"], [inert]')) return false;
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    }
+    // jsdom does not implement layout, so only apply this browser-only guard
+    // outside the test environment.
+    const isJsdom = /jsdom/i.test(navigator.userAgent);
+    if (!isJsdom && element.offsetParent === null && element.getClientRects?.().length === 0) return false;
+    return true;
+  }
+
+  function deepSeekMessageContainer(element) {
+    return element.closest('.ds-message') || element;
+  }
+
+  function getCandidates() {
+    let explicit = Array.from(new Set(
+      Array.from(document.querySelectorAll(site.selectors.join(',')))
+        .filter((element) => !element.closest(`#${HOST_ID}`))
+        .map((element) => {
+          if (currentProvider === 'deepseek' && element.matches('.fbb737a4')) {
+            return deepSeekMessageContainer(element);
+          }
+          return element;
+        })
+    ));
+    explicit = explicit.filter((element) => (
+      !isAssistantMessage(element)
+      && (!['chatgpt', 'deepseek'].includes(currentProvider) || isRenderedMessage(element))
+    ));
+    if (currentProvider !== 'deepseek') return explicit;
+
+    // DeepSeek changes generated class names regularly. Keep a structural
+    // fallback for versions without an explicit user-role marker, and include
+    // image-only message containers whose text marker may be absent.
+    const structural = Array.from(document.querySelectorAll('.ds-message'))
+      .filter((element) => !element.closest(`#${HOST_ID}`))
+      .filter((element) => !isAssistantMessage(element))
+      .filter(isRenderedMessage)
+      .filter((element) => !element.querySelector(
+        '.ds-markdown, [class*="ds-markdown"], [data-message-author-role="assistant"]'
+      ));
+    if (!explicit.length) return structural;
+    const explicitNodes = new Set(explicit);
+    return Array.from(new Set([
+      ...explicit,
+      ...structural.filter((element) => (
+        !explicitNodes.has(element) && getMessageImages(element).length > 0
+      ))
+    ]));
+  }
+
   function getMessageBlocks() {
-    const candidates = Array.from(document.querySelectorAll(selectors.join(',')))
-      .filter((element) => !element.closest(`#${HOST_ID}`));
+    const candidates = getCandidates();
     const rootCandidates = candidates.filter((element) => !candidates.some(
       (other) => other !== element && other.contains(element)
     ));
@@ -276,12 +526,20 @@
       const text = getMessageText(element);
       const images = getMessageImages(element);
       const nativeId = getNativeMessageId(element);
-      const row = isDoubao ? element.closest('.v_list_row') : null;
-      const turn = element.closest('user-query, m-user-query, [data-testid^="conversation-turn-"]');
-      const groupNode = row || turn || (nativeId ? `message:${nativeId}` : element);
+      const row = getVirtualRow(element);
+      const turn = site.turnSelector ? element.closest(site.turnSelector) : null;
+      const groupNode = site.groupByVirtualRow && row
+        ? row
+        : turn || (nativeId ? `message:${nativeId}` : element);
       let group = groups.get(groupNode);
       if (!group) {
-        group = { element, groupElement: row || turn || null, texts: new Set(), images: new Set(), nativeId };
+        group = {
+          element,
+          groupElement: turn || (site.groupByVirtualRow ? row : null),
+          texts: new Set(),
+          images: new Set(),
+          nativeId
+        };
         groups.set(groupNode, group);
       }
       if (text) group.texts.add(text);
@@ -303,7 +561,8 @@
         hasImage: imageCount > 0,
         imageCount,
         imageOnly,
-        nativeId: group.nativeId
+        nativeId: group.nativeId,
+        rowIndex: getRowIndex(group.groupElement || group.element)
       };
     }).filter((block) => isPromptContent(block.content));
 
@@ -311,7 +570,9 @@
     return blocks.map((entry) => {
       const occurrence = occurrences.get(entry.fingerprint) || 0;
       occurrences.set(entry.fingerprint, occurrence + 1);
-      return { ...entry, id: `${conversationId()}-${entry.fingerprint}-${occurrence}` };
+      const suffix = currentProvider === 'deepseek' && Number.isFinite(entry.rowIndex)
+        ? `r${entry.rowIndex}` : occurrence;
+      return { ...entry, id: `${conversationId()}-${entry.fingerprint}-${suffix}` };
     });
   }
 
@@ -413,6 +674,15 @@
           overflow: hidden; overflow-wrap: anywhere; }
         .saved-meta { margin-top: 4px; color: #70757a; font-size: 12px;
           overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #prompt-tooltip {
+          position: fixed; z-index: 2147483647; max-width: 360px; width: max-content;
+          max-height: min(70vh, 560px); padding: 9px 11px; overflow-y: auto;
+          overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: #9ca3af transparent;
+          color: #202124; background: rgba(255,255,255,.99); border: 1px solid #d8dce3;
+          border-radius: 9px; box-shadow: 0 7px 22px rgba(0,0,0,.2);
+          font: 11.5px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+          white-space: normal; overflow-wrap: anywhere; pointer-events: auto;
+        }
         @media (prefers-color-scheme: dark) {
           #panel { color: #e8eaed; background: rgba(32,33,36,.98); border-color: #5f6368; }
           #search, #saved-search, #saved-button, #pinned-toggle, .item, .saved-item {
@@ -430,6 +700,7 @@
           .saved-group-toggle { background: #34363a; }
           .saved-group-toggle:hover { background: #3d4045; }
           .saved-meta { color: #bdc1c6; }
+          #prompt-tooltip { color: #e8eaed; background: rgba(32,33,36,.99); border-color: #5f6368; }
         }
       </style>
       <section id="panel" class="closed" aria-label="AI Chat Navigator">
@@ -469,7 +740,8 @@
           <div id="saved-status" role="status" aria-live="polite"></div>
           <div id="saved-list" role="list"></div>
         </div>
-      </section>`;
+      </section>
+      <div id="prompt-tooltip" role="tooltip" hidden></div>`;
 
     document.documentElement.appendChild(host);
     panel = shadow.getElementById('panel');
@@ -489,6 +761,9 @@
     pinnedCount = shadow.getElementById('pinned-count');
     pinnedList = shadow.getElementById('pinned-list');
     pinnedResizer = shadow.getElementById('pinned-resizer');
+    promptTooltip = shadow.getElementById('prompt-tooltip');
+    promptTooltip.addEventListener('mouseenter', () => window.clearTimeout(tooltipHideTimer));
+    promptTooltip.addEventListener('mouseleave', scheduleHidePromptTooltip);
     historyButton?.addEventListener('click', () => {
       if (history.busy) history.cancel();
       else history.loadAll();
@@ -519,6 +794,9 @@
       savedQuery = cleanText(savedSearch.value).toLocaleLowerCase();
       renderSavedItems();
     });
+    for (const container of [list, pinnedList, savedList]) {
+      container.addEventListener('scroll', hidePromptTooltip, { passive: true });
+    }
   }
 
   function matchesQuery(entry) {
@@ -559,6 +837,34 @@
     empty.className = 'empty';
     empty.textContent = message;
     container.appendChild(empty);
+  }
+
+  function hidePromptTooltip() {
+    window.clearTimeout(tooltipHideTimer);
+    if (promptTooltip) promptTooltip.hidden = true;
+  }
+
+  function scheduleHidePromptTooltip() {
+    window.clearTimeout(tooltipHideTimer);
+    tooltipHideTimer = window.setTimeout(hidePromptTooltip, 180);
+  }
+
+  function showPromptTooltip(entry, item) {
+    if (!promptTooltip) return;
+    window.clearTimeout(tooltipHideTimer);
+    promptTooltip.textContent = entry.content || promptTitle(entry);
+    promptTooltip.hidden = false;
+    promptTooltip.scrollTop = 0;
+    const itemRect = item.getBoundingClientRect();
+    const tooltipRect = promptTooltip.getBoundingClientRect();
+    const viewportWidth = window.innerWidth || 1024;
+    const viewportHeight = window.innerHeight || 768;
+    const maxLeft = Math.max(8, viewportWidth - tooltipRect.width - 8);
+    let left = itemRect.left - tooltipRect.width - 10;
+    if (left < 8) left = Math.min(maxLeft, itemRect.right + 10);
+    const top = Math.max(8, Math.min(itemRect.top, viewportHeight - tooltipRect.height - 8));
+    promptTooltip.style.left = `${Math.max(8, Math.min(left, maxLeft))}px`;
+    promptTooltip.style.top = `${top}px`;
   }
 
   function recordMatchesEntry(record, entry) {
@@ -701,6 +1007,8 @@
       }
       await focusRecord(entry);
     });
+    item.addEventListener('mouseenter', () => showPromptTooltip(entry, item));
+    item.addEventListener('mouseleave', scheduleHidePromptTooltip);
     container.appendChild(item);
   }
 
@@ -781,6 +1089,7 @@
   }
 
   function render() {
+    hidePromptTooltip();
     makePanel();
     const indexedItems = history ? dedupeHistoryItems(history.sync()) : getMessageBlocks();
     let imageNumber = 0;
@@ -793,7 +1102,7 @@
     migrateLegacySaved(items);
     if (history) {
       historyButton.textContent = history.busy ? 'Stop' : 'Load full history';
-      historyButton.disabled = history.loading;
+      historyButton.disabled = false;
       historyStatus.textContent = history.status();
     }
 
@@ -951,7 +1260,17 @@
         pendingTarget = { ...pending, pendingAt: Number(pending.pendingAt) || Date.now() };
       }
       history = new globalThis.AIChatHistoryIndex({
-        readMessages: getMessageBlocks, conversationId, onChange: render
+        readMessages: getMessageBlocks,
+        conversationId,
+        onChange: render,
+        findScroller,
+        historyMode: site.historyMode,
+        mirrorDom: site.mirrorDom,
+        indexVersion: site.indexVersion,
+        ...site.scanTiming,
+        readNativeId: getNativeMessageId,
+        readRowIndex: getRowIndex,
+        visibleRowIndexes
       });
       render();
       observer = new MutationObserver((mutations) => {
@@ -962,13 +1281,13 @@
         })) scheduleRender();
       });
       observer.observe(document.body, { childList: true, characterData: true, attributes: true,
-        attributeFilter: ['data-message-id'], subtree: true });
+        attributeFilter: ['data-message-id', 'data-msg-id', 'aria-hidden', 'hidden', 'inert'], subtree: true });
       window.addEventListener('popstate', scheduleRender);
       window.addEventListener('hashchange', scheduleRender);
       window.addEventListener('resize', () => {
         if (pinnedHeight !== null && !pinnedList.hidden) setPinnedHeight(pinnedHeight);
       });
-      // Both sites navigate with pushState, which does not dispatch popstate.
+      // These sites navigate with pushState, which does not dispatch popstate.
       let lastConversation = conversationId();
       window.setInterval(() => {
         const currentConversation = conversationId();
